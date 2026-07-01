@@ -83,11 +83,11 @@ const handleLogin = async (e) => {
   };
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-slate-100 px-4">
+    <div className="flex min-h-screen items-center justify-center bg-orange-50/40 px-4">
       <div className="w-full max-w-sm space-y-6 rounded-2xl bg-white p-6 sm:p-8 shadow-md border border-slate-200">
         <div className="text-center space-y-1">
-          <h2 className="text-2xl font-black text-slate-900 tracking-tight">SIMANOMALI</h2>
-          <p className="text-xs text-slate-500 font-medium">Sistem Monitoring Anomali Kegiatan Lapangan</p>
+          <h2 className="text-2xl font-black text-slate-900 tracking-tight">SIMALI</h2>
+          <p className="text-xs text-slate-500 font-medium">Sistem Monitoring Anomali Sensus Ekonomi 2026</p>
         </div>
 
         {errorMsg && (
@@ -124,7 +124,7 @@ const handleLogin = async (e) => {
           <button
             type="submit"
             disabled={loading}
-            className="w-full flex justify-center py-2.5 px-4 rounded-xl shadow-2xs text-xs sm:text-sm font-bold text-white bg-blue-600 hover:bg-blue-700 focus:outline-hidden focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:bg-slate-300 disabled:cursor-not-allowed transition-all mt-6"
+            className="w-full flex justify-center py-2.5 px-4 rounded-xl shadow-2xs text-xs sm:text-sm font-bold text-white bg-orange-600 hover:bg-orange-700 focus:outline-hidden focus:ring-2 focus:ring-offset-2 focus:ring-orange-500 disabled:bg-slate-300 disabled:cursor-not-allowed transition-all mt-6"
           >
             {loading ? 'Memverifikasi Hak Akses...' : 'Masuk Dashboard'}
           </button>
