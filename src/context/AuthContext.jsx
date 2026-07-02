@@ -10,6 +10,8 @@ export const AuthProvider = ({ children }) => {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    let isInitialLoad = true;
+
     // 1. Ambil session aktif saat aplikasi pertama kali dimuat
     supabaseAuth.auth.getSession().then(({ data: { session } }) => {
       if (session) {
@@ -18,10 +20,16 @@ export const AuthProvider = ({ children }) => {
       } else {
         setLoading(false);
       }
+      isInitialLoad = false; // Tandai bahwa inisialisasi awal selesai
     });
 
     // 2. Dengarkan perubahan status auth (Login / Logout)
-    const { data: { subscription } } = supabaseAuth.auth.onAuthStateChange((_event, session) => {
+    const { data: { subscription } } = supabaseAuth.auth.onAuthStateChange((event, session) => {
+      // JANGAN jalankan ulang fetch jika ini adalah event 'SIGNED_IN' yang dipicu otomatis saat initial load
+      if (event === 'SIGNED_IN' && isInitialLoad) {
+        return;
+      }
+
       if (session) {
         setUser(session.user);
         fetchUserProfile(session.user.email);
@@ -35,7 +43,7 @@ export const AuthProvider = ({ children }) => {
     return () => subscription.unsubscribe();
   }, []);
 
-  // Fungsi Multitasking untuk mengambil detail dari app_users ATAU petugas secara lokal
+  // Fungsi untuk mengambil detail profil (Hanya mengambil kolom esensial)
   const fetchUserProfile = async (email) => {
     if (!email) {
       setLoading(false);
@@ -45,12 +53,13 @@ export const AuthProvider = ({ children }) => {
     const cleanEmail = email.trim().toLowerCase();
 
     try {
-      // Jalur A: Cari di tabel app_users (Pegawai Internal Kantor)
+      // 💡 HEMAT EGRESS: Batasi kolom, jangan select('*')
+      // Sesuai kebutuhan komponen Anda, hanya butuh nama_pengguna/email untuk identitas navbar
       const { data: kantorUser, error: kantorErr } = await supabaseData
         .from('app_users')
-        .select('*')
+        .select('email, nama_pengguna, role') 
         .eq('email', cleanEmail)
-        .maybeSingle(); // Aman dari crash 'Cannot coerce result to single JSON object'
+        .maybeSingle();
 
       if (kantorErr) console.error("Log error app_users:", kantorErr.message);
 
@@ -59,13 +68,13 @@ export const AuthProvider = ({ children }) => {
           ...kantorUser,
           tipe_akun: 'KANTOR'
         });
-        return; // Hentikan fungsi di sini jika sudah ketemu
+        return; 
       }
 
-      // Jalur B: Jika tidak ditemukan di kantor, cari di tabel petugas (Mitra Lapangan PML/PCL)
+      // 💡 HEMAT EGRESS: Batasi kolom untuk petugas lapangan
       const { data: lapanganUser, error: lapanganErr } = await supabaseData
         .from('petugas')
-        .select('*')
+        .select('email, nama_petugas, posisi_tugas')
         .eq('email', cleanEmail)
         .maybeSingle();
 
@@ -73,15 +82,14 @@ export const AuthProvider = ({ children }) => {
 
       if (lapanganUser) {
         setProfile({
-          ...lapanganUser,
-          nama_pengguna: lapanganUser.nama_petugas, // Penyelarasan kunci agar tidak patah di navbar
-          role: lapanganUser.posisi_tugas,          // Mengubah 'PML'/'PCL' menjadi dibaca sebagai 'role'
+          email: lapanganUser.email,
+          nama_pengguna: lapanganUser.nama_petugas, 
+          role: lapanganUser.posisi_tugas,          
           tipe_akun: 'LAPANGAN'
         });
         return;
       }
 
-      // Fallback jika email ada di Auth tetapi tidak ada di kedua tabel di atas
       setProfile(null);
     } catch (err) {
       console.error("Gagal mendeteksi profil pengguna secara relasional:", err.message);
