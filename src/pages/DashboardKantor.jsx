@@ -334,10 +334,10 @@ export default function DashboardKantor() {
             {/* Modal Header */}
             <div className="p-5 bg-gradient-to-r from-stone-900 to-stone-800 text-stone-100 rounded-t-2xl flex justify-between items-center shadow-xs">
               <div className="space-y-0.5">
-                <span className="text-[10px] font-black text-amber-400 uppercase tracking-widest">Detail Dokumen Antrean Kantor</span>
+                <span className="text-[10px] font-black text-amber-400 uppercase tracking-widest">Detail Status Anomali</span>
                 <h3 className="text-base font-extrabold text-white">Kecamatan {modalDetailObj.namaKec} • PML: {modalDetailObj.namaPml}</h3>
                 <p className="text-xs text-stone-300">
-                  Indikator Aturan: <span className="bg-amber-500/20 text-amber-300 font-mono font-bold px-1.5 py-0.2 rounded border border-amber-500/30">[{modalDetailObj.kode}] {DESKRIPSI_ANOMALI[modalDetailObj.kode]}</span>
+                  Jenis Anomali: <span className="bg-amber-500/20 text-amber-300 font-mono font-bold px-1.5 py-0.2 rounded border border-amber-500/30">[{modalDetailObj.kode}] {DESKRIPSI_ANOMALI[modalDetailObj.kode]}</span>
                 </p>
               </div>
               <button 
@@ -372,7 +372,7 @@ export default function DashboardKantor() {
                         </div>
                         
                         <div className="text-xs text-slate-500 font-medium flex flex-wrap gap-x-4 gap-y-1">
-                          <p>Blok SLS: <span className="text-slate-700 font-bold">{sampel.nmsls}</span></p>
+                          <p>SLS: <span className="text-slate-700 font-bold">{sampel.nmsls}</span></p>
                           <p>Desa: <span className="text-slate-700 font-bold">{sampel.nmdesa}</span></p>
                           <p>Pencacah (PCL): <span className="text-slate-700 font-bold">{sampel.nama_pcl || sampel.pcl_email}</span></p>
                         </div>
@@ -384,7 +384,7 @@ export default function DashboardKantor() {
                             "{sampel.catatan_lapangan}"
                           </div>
                         ) : (
-                          <p className="text-[11px] text-red-500 font-semibold italic">⚠️ Petugas lapangan belum memberikan jawaban klarifikasi di aplikasi mobile.</p>
+                          <p className="text-[11px] text-red-500 font-semibold italic">⚠️ Petugas lapangan belum memberikan konfirmasi di aplikasi mobile.</p>
                         )}
                       </div>
 
@@ -394,12 +394,12 @@ export default function DashboardKantor() {
                           <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md border ${
                             lpgBelumSelesai ? 'bg-red-50 text-red-600 border-red-200' : 'bg-amber-50 text-amber-800 border-amber-200'
                           }`}>
-                            LPG: {lpgBelumSelesai ? 'Kosong' : 'Selesai'}
+                            Konfirmasi Petugas: {lpgBelumSelesai ? 'Belum' : 'Sudah'}
                           </span>
                           <span className={`text-[10px] font-black px-2 py-0.5 rounded-md border ${
                             fasihSelesai ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-orange-100 text-orange-800 border-orange-200'
                           }`}>
-                            FASIH: {fasihSelesai ? 'SINKRON' : 'ANTREAN'}
+                            Status FASIH: {fasihSelesai ? 'KONFIRMASI' : 'BELUM'}
                           </span>
                         </div>
 
@@ -417,14 +417,19 @@ export default function DashboardKantor() {
                           )}
                           
                           {!fasihSelesai && !lpgBelumSelesai && (
-                            <button
-                              type="button"
-                              disabled={updatingId === sampel.anomali_id}
-                              onClick={() => handleDirectSimpanFasih(sampel.anomali_id, sampel.catatan_lapangan, sampel.status_konfirmasi)}
-                              className="bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold px-3.5 py-1.5 rounded-lg text-xs shadow-xs transition-all disabled:opacity-50"
-                            >
-                              {updatingId === sampel.anomali_id ? 'Proses...' : '✔ Tandai Sinkron'}
-                            </button>
+<button
+  type="button"
+  disabled={updatingId === sampel.anomali_id}
+  onClick={() => {
+    const yakin = window.confirm(`Apakah Anda yakin data FASIH untuk "${sampel.nama_subjek}" sudah diedit/sesuai dan ingin menandainya sebagai Selesai?`);
+    if (yakin) {
+      handleDirectSimpanFasih(sampel.anomali_id, sampel.catatan_lapangan, sampel.status_konfirmasi);
+    }
+  }}
+  className="bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold px-3.5 py-1.5 rounded-lg text-xs shadow-sm transition-all disabled:opacity-50"
+>
+  {updatingId === sampel.anomali_id ? 'Proses...' : '✔ Selesai FASIH'}
+</button>
                           )}
                         </div>
                       </div>

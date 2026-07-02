@@ -563,7 +563,7 @@ const [showPanduanModal, setShowPanduanModal] = useState(true);
                   className="w-full bg-stone-50 border border-stone-200 rounded-lg p-2.5 text-xs font-bold text-slate-800 focus:border-amber-500 focus:ring-1 focus:ring-amber-500 outline-hidden transition-all"
                 >
                   <option value="Sesuai Kondisi Lapangan">✅ Sesuai Kondisi Nyata Lapangan</option>
-                  <option value="Perlu Perbaikan Data">✏️ Perlu Perbaikan Data di Aplikasi Pusat</option>
+                  <option value="Perlu Perbaikan Data">✏️ Perlu Perbaikan Data di Aplikasi Fasih</option>
                 </select>
               </div>
 
