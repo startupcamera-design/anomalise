@@ -2,6 +2,7 @@
 import React, { useState, useEffect } from 'react';
 import { supabaseData } from '../lib/supabase';
 import { useAuth } from '../context/AuthContext';
+import * as XLSX from 'xlsx'; // pastikan sudah install: npm install xlsx
 
 const DESKRIPSI_ANOMALI = {
   'U01': 'Biaya Produksi Dominan',
@@ -24,6 +25,7 @@ const DESKRIPSI_ANOMALI = {
 export default function DashboardKantor() {
   const { profile: profilUser, logout } = useAuth();
   const [loading, setLoading] = useState(true);
+  const [uploading, setUploading] = useState(false); // State loading untuk excel
   
   // Data State
   const [rawAnomali, setRawAnomali] = useState([]);
@@ -31,7 +33,7 @@ export default function DashboardKantor() {
   
   // UI Kontrol State
   const [expandedKec, setExpandedKec] = useState({});
-  const [modalDetailObj, setModalDetailObj] = useState(null); // Menyimpan data anomali aktif untuk isi modal
+  const [modalDetailObj, setModalDetailObj] = useState(null); 
   const [updatingId, setUpdatingId] = useState(null);
 
   // KPI Rapor Ringkasan
@@ -51,7 +53,6 @@ export default function DashboardKantor() {
       hitungMetrikGlobal(data || []);
       prosesStrukturAgregat(data || []);
 
-      // Jika modal sedang terbuka, perbarui isinya secara real-time
       if (modalDetailObj) {
         const updatedTarget = data.filter(raw => 
           raw.kdkec === modalDetailObj.kdkec && 
@@ -67,8 +68,12 @@ export default function DashboardKantor() {
     }
   };
 
-  useEffect(() => {
-    fetchDataMonitoringKantor();
+useEffect(() => {
+    const siapkanDataAwal = async () => {
+      await fetchDataMonitoringKantor();
+      setLoading(false); // 💡 Menutup loading screen setelah hitung agregat selesai
+    };
+    siapkanDataAwal();
   }, []);
 
   const hitungMetrikGlobal = (data) => {
@@ -136,7 +141,103 @@ export default function DashboardKantor() {
     setTreeData(finalTree);
   };
 
-  // --- 5. EKSEKUSI UPDATE STATUS FASIH ---
+  // --- LOGIKA UNGGUR & PARSING EXCEL ---
+  const handleUploadExcel = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = async (evt) => {
+      try {
+        const bstr = evt.target.result;
+        const wb = XLSX.read(bstr, { type: 'binary' });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        const rawData = XLSX.utils.sheet_to_json(ws);
+
+        if (rawData.length === 0) return alert('File Excel kosong!');
+
+        // Proses Mapping & Konstruksi IDSUBSLS 16 Digit
+        const formattedData = rawData.map((row, index) => {
+          const normalizedRow = {};
+          Object.keys(row).forEach((key) => {
+            normalizedRow[key.toString().toLowerCase().replace(/[\s_/]/g, '')] = row[key];
+          });
+
+          // A. Deteksi Nama Anomali & Konversi ke Kode Singkat
+          const namaAnomaliRaw = normalizedRow['namaanomali'] || '';
+          let kodeAnomali = 'ERR'; 
+          let kategori = 'USAHA';
+
+          // Kelompok Usaha (Prefix U)
+          if (namaAnomaliRaw.includes('Biaya Produksi Dominan')) kodeAnomali = 'U01';
+          else if (namaAnomaliRaw.includes('Keuntungan Usaha')) kodeAnomali = 'U02';
+          else if (namaAnomaliRaw.includes('penyertaan modal korporasi')) kodeAnomali = 'U03';
+          else if (namaAnomaliRaw.includes('Keuangan MBG')) kodeAnomali = 'U04';
+          else if (namaAnomaliRaw.includes('Aset, Pekerja, dan Produksi')) kodeAnomali = 'U05';
+          else if (namaAnomaliRaw.includes('tanpa menggunakan internet')) kodeAnomali = 'U06';
+          else if (namaAnomaliRaw.includes('tidak memiliki laporan keuangan')) kodeAnomali = 'U07';
+          else if (namaAnomaliRaw.includes('KBLI 2 Digit')) kodeAnomali = 'U08';
+          
+          // Kelompok Keluarga (Prefix K)
+          else if (namaAnomaliRaw.includes('Cerai / Belum Kawin')) { kodeAnomali = 'K01'; kategori = 'KELUARGA'; }
+          else if (namaAnomaliRaw.includes('Kepala Keluarga < 10 Th')) { kodeAnomali = 'K02'; kategori = 'KELUARGA'; }
+          else if (namaAnomaliRaw.includes('Anggota Keluarga Disabilitas')) { kodeAnomali = 'K03'; kategori = 'KELUARGA'; }
+          else if (namaAnomaliRaw.includes('Luas lantai per kapita')) { kodeAnomali = 'K04'; kategori = 'KELUARGA'; }
+          else if (namaAnomaliRaw.includes('Selisih pendapatan dan pengeluaran')) { kodeAnomali = 'K05'; kategori = 'KELUARGA'; }
+          else if (namaAnomaliRaw.includes('Pengeluaran listrik sebulan')) { kodeAnomali = 'K06'; kategori = 'KELUARGA'; }
+          else if (namaAnomaliRaw.includes('Jumlah Anggota Keluarga Ekstrem')) { kodeAnomali = 'K07'; kategori = 'KELUARGA'; }
+
+          // B. Fleksibilitas Nama Subjek (Usaha / KRT)
+          const namaSubjek = normalizedRow['namausaha'] || normalizedRow['namakrt'] || normalizedRow['namasubjek'] || 'Tanpa Nama';
+
+          // C. KUNCI UTAMA: GENERATE AUTOMATIC 16-DIGIT IDSUBSLS
+          // Format standard BPS: Prov (2) + Kab (2) + Kec (3) + Desa (3) + SLS (4) + SubSLS (2) = 16 Digit
+          const prov = "33";
+          const kab = "09";
+          
+          // Memastikan padding digit kode wilayah dari Excel aman (contoh: 30 menjadi 030, 5 menjadi 005)
+          const kec = String(normalizedRow['kodekec'] || normalizedRow['kdkec'] || '').trim().padStart(3, '0');
+          const desa = String(normalizedRow['kodedesa'] || normalizedRow['kddesa'] || '').trim().padStart(10, '0');
+          const sls = String(normalizedRow['kodesls'] || String(normalizedRow['kdsls'] || '')).trim().padStart(4, '0');
+          const subSls = String(normalizedRow['subsls'] || normalizedRow['kdsubsls'] || '00').trim().padStart(2, '0');
+
+          const generatedIdSubSls = `${desa}${sls}${subSls}`;
+
+          return {
+            idsubsls: generatedIdSubSls,
+            assignment_id: String(normalizedRow['assignmentid'] || normalizedRow['assignment_id'] || `GEN-${Date.now()}-${index}`),
+            nama_subjek: namaSubjek,
+            kode_anomali: kodeAnomali,
+            kategori_anomali: kategori,
+            link_fasih: normalizedRow['linkfasih'] || normalizedRow['link_fasih'] || '',
+          };
+        });
+
+        console.log("Memulai proses Bulk Upsert ke tabel anomali_data...", formattedData);
+
+        // Kirim data ke tabel anomali_data (Aman dari duplicate berkat composite constraint key)
+        const { error } = await supabaseData
+          .from('anomali_data')
+          .upsert(formattedData, { 
+            onConflict: 'assignment_id, kode_anomali', 
+            ignoreDuplicates: true 
+          });
+
+        if (error) throw error;
+
+        alert(`Berhasil memproses & mengimpor ${formattedData.length} rekord data anomali baru secara relasional!`);
+        
+        // Panggil fungsi fetch data monitoring kantor untuk menyegarkan tabel
+        if (typeof fetchSemuaAnomali === 'function') fetchSemuaAnomali();
+        
+      } catch (err) {
+        console.error(err);
+        alert('Gagal mengimpor data anomali. Pastikan kode wilayah (Kec/Desa/SLS) di Excel terdaftar di master muatan_sls! Detail Error: ' + err.message);
+      }
+    };
+    reader.readAsBinaryString(file);
+  };
+
   const handleDirectSimpanFasih = async (anomaliId, catatanLpg, statusKonf) => {
     setUpdatingId(anomaliId);
     try {
@@ -153,14 +254,12 @@ export default function DashboardKantor() {
 
       if (error) throw error;
       
-      // Ambil ulang data segar dari database
       const { data: updatedData } = await supabaseData.from('view_monitoring_anomali').select('*');
       if (updatedData) {
         setRawAnomali(updatedData);
         hitungMetrikGlobal(updatedData);
         prosesStrukturAgregat(updatedData);
 
-        // Langsung segarkan isi modal yang sedang aktif agar data di dalam modal ikut berubah
         if (modalDetailObj) {
           const freshSampel = updatedData.filter(raw => 
             raw.kdkec === modalDetailObj.kdkec && 
@@ -178,7 +277,6 @@ export default function DashboardKantor() {
   };
 
   const handleBukaModalDetail = (itemObj, namaKec) => {
-    // Saring data sampel yang cocok sebelum modal di-render
     const daftarSampel = rawAnomali.filter(raw => 
       raw.kdkec === itemObj.kdkec && 
       (raw.nama_pml === itemObj.namaPml || raw.pml_email === itemObj.pml_email) && 
@@ -234,9 +332,24 @@ export default function DashboardKantor() {
 
         {/* TABEL AGREGAT UTAMA */}
         <div className="bg-white rounded-xl border border-stone-200 shadow-2xs overflow-hidden">
-          <div className="p-4 bg-stone-50 border-b flex justify-between items-center">
+          <div className="p-4 bg-stone-50 border-b flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
             <h2 className="text-xs font-bold uppercase tracking-wider text-slate-500">Rekap Anomali</h2>
-            <button onClick={fetchDataMonitoringKantor} className="bg-white border text-xs text-amber-800 font-bold px-3 py-1.5 rounded-lg hover:bg-stone-50 shadow-3xs">🔄 Segarkan Progres</button>
+            
+            {/* AREA UTILITY: TOMBOL REFRESH & IMPOR EXCEL */}
+            <div className="flex flex-wrap items-center gap-2">
+              <label className={`cursor-pointer inline-flex items-center gap-1.5 bg-amber-700 text-white font-bold px-3 py-1.5 rounded-lg text-xs hover:bg-amber-600 shadow-3xs transition-colors ${uploading ? 'opacity-50 pointer-events-none' : ''}`}>
+                <span>{uploading ? '⏳ Memproses...' : '📁 Impor Excel'}</span>
+                <input 
+                  type="file" 
+                  accept=".xlsx, .xls" 
+                  onChange={handleUploadExcel} 
+                  className="hidden" 
+                  disabled={uploading}
+                />
+              </label>
+              
+              <button onClick={fetchDataMonitoringKantor} className="bg-white border text-xs text-amber-800 font-bold px-3 py-1.5 rounded-lg hover:bg-stone-50 shadow-3xs">🔄 Segarkan Progres</button>
+            </div>
           </div>
 
           <div className="overflow-x-auto">
@@ -325,13 +438,12 @@ export default function DashboardKantor() {
       </div>
 
       {/* ==========================================================
-          MODAL DETAIL RUMAH TANGGA & SINKRONISASI FASIH (PREMIUM LARGE SIZE)
+          MODAL DETAIL RUMAH TANGGA & SINKRONISASI FASIH
           ========================================================== */}
       {modalDetailObj && (
         <div className="fixed inset-0 bg-slate-950/60 z-30 flex items-center justify-center p-6 animate-fade-in backdrop-blur-xs">
           <div className="bg-white w-full max-w-5xl rounded-2xl shadow-2xl flex flex-col max-h-[85vh] border border-stone-200 animate-scale-up">
             
-            {/* Modal Header */}
             <div className="p-5 bg-gradient-to-r from-stone-900 to-stone-800 text-stone-100 rounded-t-2xl flex justify-between items-center shadow-xs">
               <div className="space-y-0.5">
                 <span className="text-[10px] font-black text-amber-400 uppercase tracking-widest">Detail Status Anomali</span>
@@ -348,7 +460,6 @@ export default function DashboardKantor() {
               </button>
             </div>
 
-            {/* Modal Body (Scrollable Container) */}
             <div className="p-6 overflow-y-auto bg-stone-50/50 space-y-3 flex-1">
               {modalDetailObj.daftarSampel.length === 0 ? (
                 <div className="text-center py-12 text-stone-400 font-medium">Tidak ada sampel data di bawah kombinasi wilayah ini.</div>
@@ -364,7 +475,6 @@ export default function DashboardKantor() {
                         !fasihSelesai && !lpgBelumSelesai ? 'border-l-4 border-l-orange-500 bg-orange-50/20' : 'border-l-4 border-l-stone-300'
                       }`}
                     >
-                      {/* Sisi Kiri: Informasi Riwayat Identitas */}
                       <div className="space-y-2 max-w-2xl flex-1">
                         <div className="flex flex-wrap items-center gap-2">
                           <h4 className="font-black text-slate-900 text-sm sm:text-base">🧑 {sampel.nama_subjek}</h4>
@@ -377,7 +487,6 @@ export default function DashboardKantor() {
                           <p>Pencacah (PCL): <span className="text-slate-700 font-bold">{sampel.nama_pcl || sampel.pcl_email}</span></p>
                         </div>
                         
-                        {/* Box Teks Justifikasi Petugas Lapangan */}
                         {sampel.catatan_lapangan ? (
                           <div className="p-3 bg-stone-50 border border-stone-200/80 rounded-lg text-xs text-slate-600 font-medium leading-relaxed">
                             <span className="font-extrabold text-amber-900 text-[9px] block mb-1 uppercase tracking-wider">Hasil Konfirmasi Lapangan PCL/PML:</span>
@@ -388,7 +497,6 @@ export default function DashboardKantor() {
                         )}
                       </div>
 
-                      {/* Sisi Kanan: Status & Tombol Aksi */}
                       <div className="shrink-0 flex flex-row lg:flex-col items-center lg:items-end gap-3 justify-between pt-3 lg:pt-0 border-t lg:border-t-0 border-stone-100">
                         <div className="flex items-center gap-1.5">
                           <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md border ${
@@ -403,7 +511,6 @@ export default function DashboardKantor() {
                           </span>
                         </div>
 
-                        {/* Tombol Eksekusi Pegawai */}
                         <div className="flex items-center gap-2">
                           {sampel.link_fasih && (
                             <a 
@@ -417,19 +524,19 @@ export default function DashboardKantor() {
                           )}
                           
                           {!fasihSelesai && !lpgBelumSelesai && (
-<button
-  type="button"
-  disabled={updatingId === sampel.anomali_id}
-  onClick={() => {
-    const yakin = window.confirm(`Apakah Anda yakin data FASIH untuk "${sampel.nama_subjek}" sudah diedit/sesuai dan ingin menandainya sebagai Selesai?`);
-    if (yakin) {
-      handleDirectSimpanFasih(sampel.anomali_id, sampel.catatan_lapangan, sampel.status_konfirmasi);
-    }
-  }}
-  className="bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold px-3.5 py-1.5 rounded-lg text-xs shadow-sm transition-all disabled:opacity-50"
->
-  {updatingId === sampel.anomali_id ? 'Proses...' : '✔ Selesai FASIH'}
-</button>
+                            <button
+                              type="button"
+                              disabled={updatingId === sampel.anomali_id}
+                              onClick={() => {
+                                const yakin = window.confirm(`Apakah Anda yakin data FASIH untuk "${sampel.nama_subjek}" sudah diedit/sesuai dan ingin menandainya sebagai Selesai?`);
+                                if (yakin) {
+                                  handleDirectSimpanFasih(sampel.anomali_id, sampel.catatan_lapangan, sampel.status_konfirmasi);
+                                }
+                              }}
+                              className="bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold px-3.5 py-1.5 rounded-lg text-xs shadow-sm transition-all disabled:opacity-50"
+                            >
+                              {updatingId === sampel.anomali_id ? 'Proses...' : '✔ Selesai FASIH'}
+                            </button>
                           )}
                         </div>
                       </div>
@@ -440,7 +547,6 @@ export default function DashboardKantor() {
               )}
             </div>
 
-            {/* Modal Footer */}
             <div className="p-4 bg-stone-100 border-t border-stone-200 rounded-b-2xl flex justify-end">
               <button 
                 onClick={() => setModalDetailObj(null)} 
