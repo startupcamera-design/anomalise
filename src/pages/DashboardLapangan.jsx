@@ -21,10 +21,29 @@ const DESKRIPSI_ANOMALI = {
   'K07': 'Jumlah Anggota Keluarga Ekstrem',
 };
 
+const DETAIL_ATURAN_ANOMALI = {
+  'U01': 'Blok II R.13b1 berkode 2, namun biaya produksi dominan (R.26b > 50% R.26f atau R.30b > 50% R.30f)',
+  'U02': 'Selisih pendapatan dan pengeluaran usaha negatif (Blok II R.27c < R.26f atau R.31c < R.30f)',
+  'U03': 'Status Bukan Badan Usaha (Blok II R.11a kode 13) tetapi permodalan korporasi (R.29c atau R.33c > 0)',
+  'U04': 'Ketidakwajaran rasio nilai pendapatan dibagi pengeluaran khusus program Makan Bergizi Gratis (MBG)',
+  'U05': 'Ketidakselarasan ekstrem antara nilai aset total, omset/produksi utama, dan jumlah pekerja',
+  'U06': 'Skala usaha Menengah/Besar (Blok II R.27c > 1,5M) tetapi tidak memakai internet (R.16a kode 2)',
+  'U07': 'Skala usaha Menengah/Besar (Blok II R.27c > 1,5M) tetapi tidak punya laporan keuangan (R.11d kode 2)',
+  'U08': 'KBLI 2 digit hasil pendataan (Blok II R.13g) berbeda dengan master SBR. Butuh verifikasi/mapping',
+  'K01': 'Kepala Keluarga dan pasangannya berstatus cerai atau belum kawin (Blok I R.11 berkode 2, 3, atau 4)',
+  'K02': 'Umur KRT < 10 tahun (Blok I R.13 < 10) dan status tempat tinggal milik sendiri (Blok IV R.3a kode 1)',
+  'K03': 'Seluruh anggota keluarga menyandang disabilitas (Blok III R.20 A-F berkode 1 untuk semua ART)',
+  'K04': 'Luas lantai per kapita ekstrem < 3 m2 atau > 200 m2 (Blok IV R.5 dibagi jumlah ART)',
+  'K05': 'Selisih pendapatan negatif (Total Blok III R.18a-c < Total Pengeluaran Blok IV R.16a-c)',
+  'K06': 'Listrik bulanan < Rp100.000 / daya < 900W, tapi punya barang mewah (AC/Kulkas/Laptop)',
+  'K07': 'Jumlah Anggota Rumah Tangga (ART) ekstrem dalam satu keluarga (> 10 orang)',
+};
+
 export default function DashboardLapangan() {
   const { profile: profilUser, logout } = useAuth();
   const [loading, setLoading] = useState(true);
-  
+  // State untuk mengontrol Modal Panduan Otomatis saat Pertama Terbuka
+const [showPanduanModal, setShowPanduanModal] = useState(true);
   // Data Hirarki Lapangan
   const [daftarPclAgregat, setDaftarPclAgregat] = useState([]); 
   const [selectedPcl, setSelectedPcl] = useState(null);       
@@ -360,7 +379,7 @@ export default function DashboardLapangan() {
                         </span>
                       ) : (
                         <span className="bg-emerald-50 text-emerald-700 border border-emerald-200 text-xs font-extrabold px-3 py-1 rounded-full whitespace-nowrap">
-                          ✅ {sls.totalAnomali} Sudah Konfirmasi
+                          ✅ {sls.totalAnomali} Belum Ada Anomali
                         </span>
                       )}
                     </div>
@@ -469,9 +488,9 @@ export default function DashboardLapangan() {
               <span className="font-bold text-slate-900 block leading-snug text-xs sm:text-sm">
                 {teksKeterangan}
               </span>
-              <span className="text-[10px] text-slate-400 font-medium block">
-                Sumber Dokumen: {isUsha ? 'Kuesioner Validasi Usaha' : 'Kuesioner Karakteristik Keluarga'}
-              </span>
+<span className="text-[11px] text-amber-900/80 bg-amber-50/60 font-medium block px-2 py-1 rounded-md border border-amber-100/70 mt-1 leading-normal">
+  Cek :{DETAIL_ATURAN_ANOMALI[err.kode_anomali] || 'Keterangan aturan tidak ditemukan.'}
+</span>
             </div>
           </div>
           
@@ -577,7 +596,148 @@ export default function DashboardLapangan() {
           </div>
         </div>
       )}
+{/* ==========================================================
+    MODAL POPUP PANDUAN OTOMATIS (PERTAMA KALI HALAMAN DIBUKA)
+    ========================================================== */}
+{showPanduanModal && (
+  <div className="fixed inset-0 bg-slate-900/70 z-40 flex items-center justify-center p-4 animate-fade-in backdrop-blur-xs">
+    <div className="bg-white w-full max-w-3xl rounded-2xl shadow-2xl border border-stone-200 flex flex-col max-h-[85vh] animate-scale-up">
+      
+      {/* Header Modal */}
+      <div className="p-5 bg-gradient-to-r from-amber-800 to-orange-900 text-white rounded-t-2xl flex justify-between items-center shrink-0">
+        <div className="space-y-0.5">
+          <h3 className="text-base sm:text-lg font-black tracking-tight text-amber-50">
+            📢 Kamus Kode Anomali
+          </h3>
+          <p className="text-xs text-amber-200/80 font-medium">
+            Sensus Ekonomi & Pendataan Karakteristik Keluarga
+          </p>
+        </div>
+        <button 
+          onClick={() => setShowPanduanModal(false)} 
+          className="bg-white/10 hover:bg-white/20 text-white text-sm font-bold w-8 h-8 rounded-full flex items-center justify-center transition-colors"
+        >
+          ✕
+        </button>
+      </div>
 
+      {/* Konten Modal (Scrollable) */}
+      <div className="p-6 overflow-y-auto space-y-6 text-xs sm:text-sm leading-relaxed text-slate-700">
+        
+        <p className="text-stone-500 font-medium bg-amber-50 p-3 rounded-lg border border-amber-200/50">
+          <strong>Perhatian Petugas:</strong> Definisikan hasil verifikasi Anda di lapangan berdasarkan aturan rules logika blok kuesioner di bawah ini sebelum melakukan pengisian konfirmasi.
+        </p>
+
+        {/* SEKTOR 1: ANOMALI USAHA */}
+        <div className="space-y-3">
+          <h4 className="text-sm font-extrabold text-amber-800 uppercase tracking-wider flex items-center gap-1.5 border-b border-stone-100 pb-1.5">
+            🏢 Anomali Usaha
+          </h4>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            
+            <div className="bg-stone-50 p-3 rounded-xl border border-stone-200/60 space-y-1">
+              <span className="font-bold text-slate-900 block">U01. Biaya Produksi Dominan</span>
+              <p className="text-[11px] text-slate-600">Tidak memproduksi barang sendiri <em>(Blok II R.13b1 kode 2)</em>, namun pengeluaran biaya produksi dominan <em>(R.26b &gt; 50% R.26f ATAU R.30b &gt; 50% R.30f)</em>.</p>
+            </div>
+
+            <div className="bg-stone-50 p-3 rounded-xl border border-stone-200/60 space-y-1">
+              <span className="font-bold text-slate-900 block">U02. Keuntungan Usaha</span>
+              <p className="text-[11px] text-slate-600">Selisih pendapatan dan pengeluaran bernilai negatif <em>(Blok II R.27c &lt; R.26f ATAU R.31c &lt; R.30f)</em>.</p>
+            </div>
+
+            <div className="bg-stone-50 p-3 rounded-xl border border-stone-200/60 space-y-1">
+              <span className="font-bold text-slate-900 block">U03. Penyertaan Modal Korporasi</span>
+              <p className="text-[11px] text-slate-600">Status 'Bukan Badan Usaha' <em>(Blok II R.11a kode 13)</em>, namun terisi modal korporasi publik lebih dari 0 <em>(R.29c ATAU R.33c &gt; 0)</em>.</p>
+            </div>
+
+            <div className="bg-stone-50 p-3 rounded-xl border border-stone-200/60 space-y-1">
+              <span className="font-bold text-slate-900 block">U04. Data Keuangan MBG</span>
+              <p className="text-[11px] text-slate-600">Terjadi kejanggalan indikasi rasio nilai pendapatan dibagi pengeluaran pada program khusus Makan Bergizi Gratis (MBG).</p>
+            </div>
+
+            <div className="bg-stone-50 p-3 rounded-xl border border-stone-200/60 space-y-1">
+              <span className="font-bold text-slate-900 block">U05. Hubungan Aset, Pekerja &amp; Produksi Utama</span>
+              <p className="text-[11px] text-slate-600">Ketidakselarasan ekstrem antara nilai aset, total omset/nilai produksi utama, dan total tenaga kerja yang dikerahkan.</p>
+            </div>
+
+            <div className="bg-stone-50 p-3 rounded-xl border border-stone-200/60 space-y-1">
+              <span className="font-bold text-slate-900 block">U06. Internet Usaha Menengah &amp; Besar</span>
+              <p className="text-[11px] text-slate-600">Pendapatan berskala Menengah/Besar <em>(Blok II R.27c &gt; 1,5 Miliar)</em>, namun tidak memanfaatkan internet sama sekali <em>(R.16a kode 2)</em>.</p>
+            </div>
+
+            <div className="bg-stone-50 p-3 rounded-xl border border-stone-200/60 space-y-1">
+              <span className="font-bold text-slate-900 block">U07. Laporan Keuangan Usaha Menengah &amp; Besar</span>
+              <p className="text-[11px] text-slate-600">Pendapatan berskala Menengah/Besar <em>(Blok II R.27c &gt; 1,5 Miliar)</em>, namun mengaku tidak memiliki laporan keuangan <em>(R.11d kode 2)</em>.</p>
+            </div>
+
+            <div className="bg-stone-50 p-3 rounded-xl border border-stone-200/60 space-y-1">
+              <span className="font-bold text-slate-900 block">U08. Perbedaan KBLI 2 Digit (SBR vs Lapangan)</span>
+              <p className="text-[11px] text-slate-600">KBLI 2 digit hasil pendataan lapangan berbeda dengan data prapengisian SBR <em>(Blok II R.13g)</em>. Diperlukan mapping klasifikasi ulang.</p>
+            </div>
+
+          </div>
+        </div>
+
+        {/* SEKTOR 2: ANOMALI KELUARGA */}
+        <div className="space-y-3 pt-2">
+          <h4 className="text-sm font-extrabold text-stone-800 uppercase tracking-wider flex items-center gap-1.5 border-b border-stone-100 pb-1.5">
+            🧑 Anomali Keluarga
+          </h4>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+
+            <div className="bg-stone-50 p-3 rounded-xl border border-stone-200/60 space-y-1">
+              <span className="font-bold text-slate-900 block">K01. Status Cerai / Belum Kawin</span>
+              <p className="text-[11px] text-slate-600">Kepala keluarga beserta pasangannya tercatat berstatus cerai hidup/mati atau bahkan belum kawin <em>(Blok I R.11 berkode 2, 3, atau 4)</em>.</p>
+            </div>
+
+            <div className="bg-stone-50 p-3 rounded-xl border border-stone-200/60 space-y-1">
+              <span className="font-bold text-slate-900 block">K02. Kepala Keluarga &lt; 10 Tahun (Rumah Sendiri)</span>
+              <p className="text-[11px] text-slate-600">Umur kepala keluarga di bawah 10 tahun <em>(Blok I R.13 &lt; 10)</em> dan berstatus menempati rumah milik sendiri <em>(Blok IV R.3a kode 1)</em>.</p>
+            </div>
+
+            <div className="bg-stone-50 p-3 rounded-xl border border-stone-200/60 space-y-1">
+              <span className="font-bold text-slate-900 block">K03. Semua Anggota Keluarga Disabilitas</span>
+              <p className="text-[11px] text-slate-600">Kecuali keluarga tunggal, seluruh anggota keluarga terdata menyandang disabilitas <em>(Blok III R.20 A-F seluruhnya berkode 1)</em>.</p>
+            </div>
+
+            <div className="bg-stone-50 p-3 rounded-xl border border-stone-200/60 space-y-1">
+              <span className="font-bold text-slate-900 block">K04. Luas Lantai Ekstrem Per Kapita</span>
+              <p className="text-[11px] text-slate-600">Luas lantai total <em>(Blok IV R.5)</em> dibagi jumlah anggota keluarga menghasilkan rasio padat ekstrem &lt; 3 m² atau terlalu longgar &gt; 200 m².</p>
+            </div>
+
+            <div className="bg-stone-50 p-3 rounded-xl border border-stone-200/60 space-y-1">
+              <span className="font-bold text-slate-900 block">K05. Selisih Pendapatan Negatif</span>
+              <p className="text-[11px] text-slate-600">Total pendapatan akumulasi seluruh anggota keluarga <em>(Blok III R.18a-c)</em> lebih kecil dibanding total pengeluaran <em>(Blok IV R.16a-c)</em>.</p>
+            </div>
+
+            <div className="bg-stone-50 p-3 rounded-xl border border-stone-200/60 space-y-1">
+              <span className="font-bold text-slate-900 block">K06. Listrik Rendah &amp; Ada Barang Mewah</span>
+              <p className="text-[11px] text-slate-600">Biaya listrik bulanan &lt; Rp100.000 atau daya &lt; 900 watt, namun dalam aset keluarga memiliki AC, Kulkas, atau Laptop/Komputer.</p>
+            </div>
+
+            <div className="bg-stone-50 p-3 rounded-xl border border-stone-200/60 space-y-1">
+              <span className="font-bold text-slate-900 block">K07. Jumlah Anggota Keluarga Ekstrem</span>
+              <p className="text-[11px] text-slate-600">Jumlah total anggota keluarga dalam satu kuesioner terhitung melebihi 10 orang.</p>
+            </div>
+
+          </div>
+        </div>
+
+      </div>
+
+      {/* Footer Modal */}
+      <div className="p-4 bg-stone-50 border-t border-stone-100 flex justify-end shrink-0 rounded-b-2xl">
+        <button 
+          onClick={() => setShowPanduanModal(false)}
+          className="bg-amber-700 hover:bg-amber-800 text-white font-bold px-6 py-2 rounded-xl text-xs sm:text-sm shadow-md transition-all duration-150"
+        >
+          Saya Mengerti, Buka Dashboard
+        </button>
+      </div>
+
+    </div>
+  </div>
+)}
     </div>
   );
 }
