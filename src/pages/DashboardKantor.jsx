@@ -22,7 +22,7 @@ const hitungPersen = (pembilang, penyebut) => {
   const [modalDetailObj, setModalDetailObj] = useState(null);
   const [updatingId, setUpdatingId] = useState(null);
   const [loadingModal, setLoadingModal] = useState(false);
-
+const [konfirmasiId, setKonfirmasiId] = useState(null);
   // State untuk Tab Filter di Dalam Modal
   const [subjekFilterTab, setSubjekFilterTab] = useState('siap_eksekusi');
 
@@ -217,17 +217,17 @@ const hitungPersen = (pembilang, penyebut) => {
     setSubjekFilterTab('siap_eksekusi');
     setLoadingModal(true);
     
-    // Inisialisasi awal modal agar terbuka dengan loader
-    setModalDetailObj({ ...itemObj, namaKec: namaKec, daftarSubjek: [] });
+    // Simpan juga kode yang di-klik ke state agar kita bisa memberi highlight di dalam modal
+    setModalDetailObj({ ...itemObj, namaKec: namaKec, kodePemicu: itemObj.kode, daftarSubjek: [] });
 
     try {
-      // Ambil data lengkap khusus untuk sub-grup filter ini saja
+      // PENGATURAN BARU: Hapus filter .eq('kode_anomali', itemObj.kode)
+      // Agar semua anomali dengan assignment_id yang sama ikut ketarik
       const { data: sampelTarget, error } = await supabaseData
         .from('view_monitoring_anomali')
         .select('anomali_id, assignment_id, nama_subjek, nmdesa, nmsls, nama_pcl, pcl_email, link_fasih, kode_anomali, status_konfirmasi, catatan_lapangan, status_fasih')
         .eq('kdkec', itemObj.kdkec)
-        .eq('pml_email', itemObj.pml_email)
-        .eq('kode_anomali', itemObj.kode);
+        .eq('pml_email', itemObj.pml_email); // Menarik semua kode untuk subjek di wilayah PML ini
 
       if (error) throw error;
 
@@ -243,6 +243,7 @@ const hitungPersen = (pembilang, penyebut) => {
           nmsls: profilUtama.nmsls,
           nama_pcl: profilUtama.nama_pcl || profilUtama.pcl_email,
           link_fasih: profilUtama.link_fasih,
+          // Ini akan menampung semua baris anomali yang dimiliki assignment_id tersebut
           detailAnomali: semuaAnomaliSubjek.map(a => ({
             anomali_id: a.anomali_id,
             kode: a.kode_anomali,
@@ -253,7 +254,12 @@ const hitungPersen = (pembilang, penyebut) => {
         };
       });
 
-      setModalDetailObj(prev => ({ ...prev, daftarSubjek: grupBerdasarkanSubjek }));
+      // Opsional: Filter grupBerdasarkanSubjek agar hanya memuat subjek yang minimal mempunyai kodePemicu tersebut
+      const subjekValid = grupBerdasarkanSubjek.filter(subjek => 
+        subjek.detailAnomali.some(a => a.kode === itemObj.kode)
+      );
+
+      setModalDetailObj(prev => ({ ...prev, daftarSubjek: subjekValid }));
     } catch (err) {
       console.error("Gagal memuat detail sampel:", err.message);
       alert("Gagal memuat data detail subjek.");
@@ -264,8 +270,9 @@ const hitungPersen = (pembilang, penyebut) => {
   };
 
   // 3. OPTIMALISASI AKSI: Mengubah data lokal tanpa hit ulang API Global Supabase (*Zero Egress Refresh*)
-  const handleSimpanFasihTunggal = async (anomaliId) => {
+const handleSimpanFasihTunggal = async (anomaliId) => {
     setUpdatingId(anomaliId);
+    setKonfirmasiId(null); // Tutup modal konfirmasi setelah disetujui
     try {
       const payload = {
         anomali_id: anomaliId,
@@ -281,7 +288,10 @@ const hitungPersen = (pembilang, penyebut) => {
       if (error) throw error;
 
       // --- OPTIMALISASI ZERO-EGRESS LOCAL STATE UPDATE ---
-      // Perbarui Tree Data Utama secara lokal
+      const kodeAnomaliTerupdate = modalDetailObj.daftarSubjek
+        .flatMap(s => s.detailAnomali)
+        .find(a => a.anomali_id === anomaliId)?.kode;
+
       setTreeData(prevTree => {
         return prevTree.map(kec => {
           if (kec.namaKec !== modalDetailObj.namaKec) return kec;
@@ -292,7 +302,7 @@ const hitungPersen = (pembilang, penyebut) => {
               return {
                 ...pml,
                 kodeList: pml.kodeList.map(item => {
-                  if (item.kode !== modalDetailObj.kode) return item;
+                  if (item.kode !== kodeAnomaliTerupdate) return item;
                   return {
                     ...item,
                     sudahFasih: item.sudahFasih + 1,
@@ -305,14 +315,12 @@ const hitungPersen = (pembilang, penyebut) => {
         });
       });
 
-      // Perbarui Widget Ringkasan Global secara lokal
       setSummaryMetrics(prev => ({
         ...prev,
         sudahFasih: prev.sudahFasih + 1,
         belumFasih: Math.max(0, prev.belumFasih - 1)
       }));
 
-      // Perbarui State Modal internal saat ini secara langsung
       if (modalDetailObj) {
         const grupTerbaru = modalDetailObj.daftarSubjek.map(subjek => {
           return {
@@ -608,51 +616,77 @@ const hitungPersen = (pembilang, penyebut) => {
 
                     {/* LIST ANOMALI DI DALAMNYA */}
                     <div className="divide-y divide-stone-100">
-                      {subjek.detailAnomali.map(anomali => {
-                        const isSelesaiFasih = anomali.status_fasih === 'Sudah Tindak Lanjut FASIH';
-                        const belumAdaKeteranganLapangan = !anomali.catatan_lapangan || anomali.status_konfirmasi === 'Belum Tindak Lanjut';
-                        const IsSiapEksekusi = !isSelesaiFasih && !belumAdaKeteranganLapangan;
+{subjek.detailAnomali.map(anomali => {
+    const isSelesaiFasih = anomali.status_fasih === 'Sudah Tindak Lanjut FASIH';
+    const belumAdaKeteranganLapangan = !anomali.catatan_lapangan || anomali.status_konfirmasi === 'Belum Tindak Lanjut';
+    const IsSiapEksekusi = !isSelesaiFasih && !belumAdaKeteranganLapangan;
+    
+    // PENGATURAN BARU: Deteksi apakah baris ini adalah kode spesifik yang di-klik user di tabel utama
+    const isPemicuUtama = anomali.kode === modalDetailObj.kodePemicu;
 
-                        const handleCopyTeks = (id, teks) => {
-                          if (!teks) return;
-                          navigator.clipboard.writeText(teks);
-                          setCopiedId(id);
-                          setTimeout(() => setCopiedId(null), 2000);
-                        };
+    const handleCopyTeks = (id, teks) => {
+      if (!teks) return;
+      navigator.clipboard.writeText(teks);
+      setCopiedId(id);
+      setTimeout(() => setCopiedId(null), 2000);
+    };
 
-                        return (
-                          <div key={anomali.anomali_id} className={`p-4 flex flex-col md:flex-row md:items-start justify-between gap-4 transition-colors ${IsSiapEksekusi ? 'bg-amber-50/40 border-l-4 border-l-amber-500' : isSelesaiFasih ? 'bg-emerald-50/10 opacity-60' : 'bg-white'}`}>
-                            <div className="flex-1 space-y-2">
-                              <div className="flex items-center gap-2 flex-wrap">
-                                <span className={`text-xs font-mono font-black px-2 py-0.5 rounded ${isSelesaiFasih ? 'bg-emerald-100 text-emerald-800 line-through' : 'bg-red-100 text-red-900'}`}>{anomali.kode}</span>
-                                <span className="text-xs font-bold text-slate-700">{getInfoAnomali(anomali.kode, 'deskripsi')}</span>
-                                {anomali.status_konfirmasi === 'Sesuai Kondisi Lapangan' && <span className="text-[10px] font-extrabold bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-md border border-emerald-200 shadow-3xs">🟢 Sesuai Kondisi Lapangan</span>}
-                                {anomali.status_konfirmasi === 'Perlu Perbaikan Data' && <span className="text-[10px] font-extrabold bg-rose-100 text-rose-800 px-2 py-0.5 rounded-md border border-rose-200 shadow-3xs">🔴 Perlu Perbaikan Data</span>}
-                                {IsSiapEksekusi && <span className="text-[9px] font-extrabold bg-amber-600 text-white px-1.5 py-0.5 rounded animate-pulse">SIAP VERIFIKASI</span>}
-                              </div>
+    return (
+      <div 
+        key={anomali.anomali_id} 
+        className={`p-4 flex flex-col md:flex-row md:items-start justify-between gap-4 transition-colors ${
+          isPemicuUtama 
+            ? 'bg-amber-50/70 border-l-4 border-l-amber-600 shadow-xs ring-1 ring-amber-500/20' // Highlight khusus untuk kode pemicu klik
+            : IsSiapEksekusi 
+              ? 'bg-orange-50/30 border-l-4 border-l-orange-400' 
+              : isSelesaiFasih 
+                ? 'bg-emerald-50/10 opacity-60' 
+                : 'bg-white'
+        }`}
+      >
+        <div className="flex-1 space-y-2">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className={`text-xs font-mono font-black px-2 py-0.5 rounded ${isSelesaiFasih ? 'bg-emerald-100 text-emerald-800 line-through' : 'bg-red-100 text-red-900'}`}>{anomali.kode}</span>
+            <span className="text-xs font-bold text-slate-700">{getInfoAnomali(anomali.kode, 'deskripsi')}</span>
+            
+            {/* PENGATURAN BARU: Badge penanda asal klik */}
+            {!isPemicuUtama && <span className="text-[9px] font-black bg-amber-700 text-white px-1.5 py-0.5 rounded shadow-3xs">ANOMALI LAINNYA</span>}
+            
+            {anomali.status_konfirmasi === 'Sesuai Kondisi Lapangan' && <span className="text-[10px] font-extrabold bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-md border border-emerald-200 shadow-3xs">🟢 Sesuai Kondisi Lapangan</span>}
+            {anomali.status_konfirmasi === 'Perlu Perbaikan Data' && <span className="text-[10px] font-extrabold bg-rose-100 text-rose-800 px-2 py-0.5 rounded-md border border-rose-200 shadow-3xs">🔴 Perlu Perbaikan Data</span>}
+            {IsSiapEksekusi && <span className="text-[9px] font-extrabold bg-amber-600 text-white px-1.5 py-0.5 rounded animate-pulse">SIAP VERIFIKASI</span>}
+          </div>
 
-                              {anomali.catatan_lapangan ? (
-                                <div className="p-2.5 bg-white border border-stone-200 rounded-lg text-xs text-slate-600 leading-relaxed shadow-3xs space-y-2">
-                                  <div className="flex justify-between items-center border-b border-stone-100 pb-1">
-                                    <span className="font-bold text-amber-900 text-[10px] block uppercase tracking-wide">Keterangan Lapangan ({anomali.kode}):</span>
-                                    <button type="button" onClick={() => handleCopyTeks(anomali.anomali_id, anomali.catatan_lapangan)} className={`px-2 py-0.5 rounded text-[10px] font-bold border transition-all active:scale-95 ${copiedId === anomali.anomali_id ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-stone-50 text-stone-600 hover:bg-stone-100 border-stone-300'}`}>{copiedId === anomali.anomali_id ? '📋 Tersalin!' : '📄 Salin Catatan'}</button>
-                                  </div>
-                                  <div className="italic text-slate-700 font-medium">"{anomali.catatan_lapangan}"</div>
-                                </div>
-                              ) : (
-                                <p className="text-[11px] text-stone-400 font-semibold italic">⏳ Petugas lapangan belum memberikan konfirmasi untuk kode {anomali.kode}.</p>
-                              )}
-                            </div>
+          {/* Sisa kode detail catatan lapangan dan tombol verifikasi ke bawah tetap sama... */}
+          {anomali.catatan_lapangan ? (
+            <div className="p-2.5 bg-white border border-stone-200 rounded-lg text-xs text-slate-600 leading-relaxed shadow-3xs space-y-2">
+              <div className="flex justify-between items-center border-b border-stone-100 pb-1">
+                <span className="font-bold text-amber-900 text-[10px] block uppercase tracking-wide">Keterangan Lapangan ({anomali.kode}):</span>
+                <button type="button" onClick={() => handleCopyTeks(anomali.anomali_id, anomali.catatan_lapangan)} className={`px-2 py-0.5 rounded text-[10px] font-bold border transition-all active:scale-95 ${copiedId === anomali.anomali_id ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-stone-50 text-stone-600 hover:bg-stone-100 border-stone-300'}`}>{copiedId === anomali.anomali_id ? '📋 Tersalin!' : '📄 Salin Catatan'}</button>
+              </div>
+              <div className="italic text-slate-700 font-medium">"{anomali.catatan_lapangan}"</div>
+            </div>
+          ) : (
+            <p className="text-[11px] text-stone-400 font-semibold italic">⏳ Petugas lapangan belum memberikan konfirmasi untuk kode {anomali.kode}.</p>
+          )}
+        </div>
 
-                            <div className="shrink-0 flex items-center md:items-end flex-row md:flex-col justify-between md:justify-start gap-2 pt-2 md:pt-0 border-t md:border-t-0 border-stone-100">
-                              <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${isSelesaiFasih ? 'bg-emerald-100 text-emerald-800' : IsSiapEksekusi ? 'bg-amber-100 text-amber-900 font-extrabold' : 'bg-stone-100 text-stone-500'}`}>{isSelesaiFasih ? '✔ Selesai' : IsSiapEksekusi ? '⏳ Menunggu Anda' : '💤 Belum dikonfirmasi'}</span>
-                              {IsSiapEksekusi && (
-                                <button type="button" disabled={updatingId === anomali.anomali_id} onClick={() => handleSimpanFasihTunggal(anomali.anomali_id)} className="bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold px-3 py-1.5 rounded-lg text-xs shadow-md transition-all active:scale-95">{updatingId === anomali.anomali_id ? 'Proses...' : '✔ Setujui'}</button>
-                              )}
-                            </div>
-                          </div>
-                        );
-                      })}
+        <div className="shrink-0 flex items-center md:items-end flex-row md:flex-col justify-between md:justify-start gap-2 pt-2 md:pt-0 border-t md:border-t-0 border-stone-100">
+          <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${isSelesaiFasih ? 'bg-emerald-100 text-emerald-800' : IsSiapEksekusi ? 'bg-amber-100 text-amber-900 font-extrabold' : 'bg-stone-100 text-stone-500'}`}>{isSelesaiFasih ? '✔ Selesai' : IsSiapEksekusi ? '⏳ Menunggu Anda' : '💤 Belum dikonfirmasi'}</span>
+         {IsSiapEksekusi && (
+  <button 
+    type="button" 
+    disabled={updatingId === anomali.anomali_id} 
+    onClick={() => setKonfirmasiId(anomali.anomali_id)} // Mengaktifkan modal konfirmasi
+    className="bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold px-3 py-1.5 rounded-lg text-xs shadow-md transition-all active:scale-95"
+  >
+    {updatingId === anomali.anomali_id ? 'Proses...' : '✔ Sudah FASIH'}
+  </button>
+)}
+        </div>
+      </div>
+    );
+  })}
                     </div>
                   </div>
                 ))
@@ -662,6 +696,42 @@ const hitungPersen = (pembilang, penyebut) => {
             {/* FOOTER */}
             <div className="p-4 bg-stone-100 border-t border-stone-200 rounded-b-2xl flex justify-end">
               <button onClick={() => setModalDetailObj(null)} className="bg-white border border-stone-300 hover:bg-stone-50 text-slate-700 font-bold px-5 py-2 rounded-xl text-xs shadow-3xs transition-colors">Tutup Jendela</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL KONFIRMASI PERSETUJUAN */}
+      {konfirmasiId && (
+        <div className="fixed inset-0 bg-slate-950/70 z-40 flex items-center justify-center p-4 backdrop-blur-xs animate-fade-in">
+          <div className="bg-white w-full max-w-sm rounded-xl border border-stone-200 p-5 shadow-2xl space-y-4 animate-scale-up">
+            <div className="flex items-center gap-2.5 text-orange-600">
+              <span className="text-xl">⚠️</span>
+              <h4 className="text-xs font-black uppercase tracking-wider text-slate-800">Konfirmasi Tindak Lanjut</h4>
+            </div>
+            
+            <div className="space-y-2 text-xs leading-relaxed text-slate-600 font-medium">
+              <p>Apakah Anda yakin ingin menandai anomali ini sebagai <strong className="text-emerald-700 font-bold">"Sudah Tindak Lanjut FASIH"</strong>?</p>
+              <blockquote className="bg-orange-50 border-l-2 border-orange-400 p-2 rounded text-[11px] font-semibold text-orange-950 italic">
+                Penting: Pastikan isian data dokumen pada aplikasi FASIH benar-benar telah ditindaklanjuti anomalinya.
+              </blockquote>
+            </div>
+
+            <div className="flex justify-end gap-2 pt-2 border-t border-stone-100 text-xs font-bold">
+              <button
+                type="button"
+                onClick={() => setKonfirmasiId(null)}
+                className="bg-stone-100 hover:bg-stone-200 text-slate-700 px-4 py-2 rounded-lg transition-colors border"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                onClick={() => handleSimpanFasihTunggal(konfirmasiId)}
+                className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg shadow-sm transition-colors"
+              >
+                Ya, Saya Yakin
+              </button>
             </div>
           </div>
         </div>
