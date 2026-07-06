@@ -14,6 +14,12 @@ export default function DashboardKantor() {
     return `${((pembilang / penyebut) * 100).toFixed(1)}%`;
   };
 
+  const formatTanggalIndo = (stringTanggal) => {
+    if (!stringTanggal || stringTanggal === '0000-00-00') return "-";
+    const opsi = { day: '2-digit', month: 'long', year: 'numeric' };
+    return new Date(stringTanggal).toLocaleDateString('id-ID', opsi);
+  };
+
   // Data State
   const [masterAnomali, setMasterAnomali] = useState([]);
   const [treeData, setTreeData] = useState([]);
@@ -21,11 +27,19 @@ export default function DashboardKantor() {
   
   // UI Kontrol State
   const [expandedKec, setExpandedKec] = useState({});
+  const [expandedSnap, setExpandedSnap] = useState({});
   const [modalDetailObj, setModalDetailObj] = useState(null);
   const [updatingId, setUpdatingId] = useState(null);
   const [loadingModal, setLoadingModal] = useState(false);
   const [konfirmasiId, setKonfirmasiId] = useState(null);
   const [idSelesaiLokal, setIdSelesaiLokal] = useState([]);
+
+  // State Baru untuk Alur Unggah Excel Cerdas
+  const [rawExcelData, setRawExcelData] = useState(null);
+  const [modalUploadReview, setModalUploadReview] = useState(false);
+  const [pilihanTanggalSnapshot, setPilihanTanggalSnapshot] = useState(new Date().toISOString().split('T')[0]);
+  const [uploadProgressStatus, setUploadProgressStatus] = useState(''); // 'membaca', 'mengirim', 'selesai'
+  const [hasilUploadRingkasan, setHasilUploadRingkasan] = useState(null);
 
   // State untuk Tab Filter di Dalam Modal
   const [subjekFilterTab, setSubjekFilterTab] = useState('siap_eksekusi');
@@ -58,7 +72,7 @@ export default function DashboardKantor() {
     try {
       const { data, error } = await supabaseData
         .from('view_monitoring_anomali')
-        .select('kdkec, nmkec, nama_pml, pml_email, kode_anomali, status_konfirmasi, status_fasih');
+        .select('kdkec, nmkec, tanggal_snapshot, nama_pml, pml_email, kode_anomali, status_konfirmasi, status_fasih');
 
       if (error) throw error;
       
@@ -95,29 +109,35 @@ export default function DashboardKantor() {
     data.forEach(item => {
       const kecKey = item.kdkec || '999';
       const namaKecamatannya = item.nmkec || 'TIDAK TERDEFINISI';
+      const tglKey = item.tanggal_snapshot || '0000-00-00';
       const pmlKey = item.nama_pml || item.pml_email || 'TANPA PML';
       const pmlEmailKey = item.pml_email || 'no-email';
       const kodeKey = item.kode_anomali || 'ERR';
 
       if (!kecMap[kecKey]) {
-        kecMap[kecKey] = { kodeKec: kecKey, namaKec: namaKecamatannya, pmlRows: {} };
+        kecMap[kecKey] = { kodeKec: kecKey, namaKec: namaKecamatannya, snapshotRows: {} };
       }
 
-      if (!kecMap[kecKey].pmlRows[pmlKey]) {
-        kecMap[kecKey].pmlRows[pmlKey] = { namaPml: pmlKey, emailPml: pmlEmailKey, kodeRows: {} };
+      if (!kecMap[kecKey].snapshotRows[tglKey]) {
+        kecMap[kecKey].snapshotRows[tglKey] = { tglSnapshot: tglKey, pmlRows: {} };
       }
 
-      if (!kecMap[kecKey].pmlRows[pmlKey].kodeRows[kodeKey]) {
-        kecMap[kecKey].pmlRows[pmlKey].kodeRows[kodeKey] = {
+      if (!kecMap[kecKey].snapshotRows[tglKey].pmlRows[pmlKey]) {
+        kecMap[kecKey].snapshotRows[tglKey].pmlRows[pmlKey] = { namaPml: pmlKey, emailPml: pmlEmailKey, kodeRows: {} };
+      }
+
+      if (!kecMap[kecKey].snapshotRows[tglKey].pmlRows[pmlKey].kodeRows[kodeKey]) {
+        kecMap[kecKey].snapshotRows[tglKey].pmlRows[pmlKey].kodeRows[kodeKey] = {
           kode: kodeKey,
           total: 0, sudahPcl: 0, belumPcl: 0, sudahFasih: 0, belumFasih: 0,
           kdkec: kecKey,
+          tanggal_snapshot: tglKey,
           pml_email: pmlEmailKey,
           namaPml: pmlKey
         };
       }
 
-      const targetKode = kecMap[kecKey].pmlRows[pmlKey].kodeRows[kodeKey];
+      const targetKode = kecMap[kecKey].snapshotRows[tglKey].pmlRows[pmlKey].kodeRows[kodeKey];
       targetKode.total += 1;
 
       if (item.status_konfirmasi !== 'Belum Tindak Lanjut') {
@@ -134,23 +154,29 @@ export default function DashboardKantor() {
 
     const finalTree = Object.values(kecMap).map(k => ({
       ...k,
-      pmlList: Object.values(k.pmlRows).map(p => ({
-        ...p,
-        kodeList: Object.values(p.kodeRows).sort((a, b) => a.kode.localeCompare(b.kode))
-      })).sort((a, b) => a.namaPml.localeCompare(b.namaPml))
+      snapshotList: Object.values(k.snapshotRows).map(s => ({
+        ...s,
+        pmlList: Object.values(s.pmlRows).map(p => ({
+          ...p,
+          kodeList: Object.values(p.kodeRows).sort((a, b) => a.kode.localeCompare(b.kode))
+        })).sort((a, b) => a.namaPml.localeCompare(b.namaPml))
+      })).sort((a, b) => b.tglSnapshot.localeCompare(a.tglSnapshot))
     }));
 
     finalTree.sort((a, b) => String(a.kodeKec).localeCompare(String(b.kodeKec), undefined, { numeric: true }));
     setTreeData(finalTree);
   };
 
-  const handleUploadExcel = async (e) => {
+  // Fase 1: Membaca File Excel & Membuka Modal Review Ringkasan Awal
+  const handlePilihFileExcel = (e) => {
     const file = e.target.files[0];
     if (!file) return;
+
     setUploading(true);
+    setUploadProgressStatus('membaca');
 
     const reader = new FileReader();
-    reader.onload = async (evt) => {
+    reader.onload = (evt) => {
       try {
         const bstr = evt.target.result;
         const wb = XLSX.read(bstr, { type: 'binary' });
@@ -158,11 +184,40 @@ export default function DashboardKantor() {
         const rawData = XLSX.utils.sheet_to_json(ws);
 
         if (rawData.length === 0) {
+          alert('File Excel kosong!');
           setUploading(false);
-          return alert('File Excel kosong!');
+          return;
         }
 
-        const formattedData = rawData.map((row, index) => {
+        setRawExcelData(rawData);
+        setHasilUploadRingkasan(null); // Reset hasil ringkasan sebelumnya
+        setModalUploadReview(true);    // Buka dialog review konfirmasi
+      } catch (err) {
+        alert('Gagal membaca file Excel: ' + err.message);
+        setUploading(false);
+      }
+    };
+    reader.readAsBinaryString(file);
+    // Reset file input value agar bisa memilih file yang sama lagi nantinya
+    e.target.value = '';
+  };
+
+  // Fase 2: Eksekusi Penyimpanan Data ke Supabase dengan Progres & Ringkasan Akhir
+  const handleEksekusiUploadKeDatabase = async () => {
+    if (!rawExcelData) return;
+    setUploadProgressStatus('mengirim');
+
+    try {
+      const { data: dataMenggantung } = await supabaseData
+        .from('view_monitoring_anomali')
+        .select('assignment_id, kode_anomali, pertama_muncul_pada')
+        .not('status_fasih', 'eq', 'Sudah Tindak Lanjut FASIH');
+
+      let jumlahSukses = 0;
+      let jumlahGagal = 0;
+
+      const formattedData = rawExcelData.map((row, index) => {
+        try {
           const normalizedRow = {};
           Object.keys(row).forEach((key) => {
             normalizedRow[key.toString().toLowerCase().replace(/[\s_/]/g, '')] = row[key];
@@ -180,36 +235,55 @@ export default function DashboardKantor() {
           const sls = String(normalizedRow['kodesls'] || String(normalizedRow['kdsls'] || '')).trim().padStart(4, '0');
           const subSls = String(normalizedRow['subsls'] || normalizedRow['kdsubsls'] || '00').trim().padStart(2, '0');
           const generatedIdSubSls = `${desa}${sls}${subSls}`;
+          const assignmentId = String(normalizedRow['assignmentid'] || normalizedRow['assignment_id'] || `GEN-${Date.now()}-${index}`);
 
+          const temukanDataLama = dataMenggantung?.find(
+            old => old.assignment_id === assignmentId && old.kode_anomali === kodeAnomali
+          );
+
+          jumlahSukses++; // Asumsi awal baris data terformat dengan baik
           return {
             idsubsls: generatedIdSubSls,
-            assignment_id: String(normalizedRow['assignmentid'] || normalizedRow['assignment_id'] || `GEN-${Date.now()}-${index}`),
+            assignment_id: assignmentId,
             nama_subjek: namaSubjek,
             kode_anomali: kodeAnomali,
             kategori_anomali: kategori,
             link_fasih: normalizedRow['linkfasih'] || normalizedRow['link_fasih'] || '',
+            tanggal_snapshot: pilihanTanggalSnapshot,
+            pertama_muncul_pada: temukanDataLama ? temukanDataLama.pertama_muncul_pada : pilihanTanggalSnapshot
           };
-        });
+        } catch (errRow) {
+          jumlahGagal++;
+          return null;
+        }
+      }).filter(item => item !== null);
 
+      if (formattedData.length > 0) {
         const { error } = await supabaseData
           .from('anomali_data')
           .upsert(formattedData, {
-            onConflict: 'assignment_id, kode_anomali',
+            onConflict: 'assignment_id, kode_anomali, tanggal_snapshot',
             ignoreDuplicates: true
           });
 
         if (error) throw error;
-        alert(`Berhasil memproses & mengimpor ${formattedData.length} rekord data anomali baru!`);
-        fetchDataMonitoringKantor();
-
-      } catch (err) {
-        console.error(err);
-        alert('Gagal mengimpor data anomali: ' + err.message);
-      } finally {
-        setUploading(false);
       }
-    };
-    reader.readAsBinaryString(file);
+
+      // Tampilkan hasil final akhir di modal
+      setHasilUploadRingkasan({
+        total: rawExcelData.length,
+        sukses: jumlahSukses,
+        gagal: jumlahGagal
+      });
+      setUploadProgressStatus('selesai');
+      fetchDataMonitoringKantor();
+
+    } catch (err) {
+      console.error(err);
+      alert('Gagal mengimpor data anomali: ' + err.message);
+      setModalUploadReview(false);
+      setUploading(false);
+    }
   };
 
   const handleBukaModalDetail = async (itemObj, namaKec) => {
@@ -217,14 +291,21 @@ export default function DashboardKantor() {
     setLoadingModal(true);
     setIdSelesaiLokal([]);
     
-    setModalDetailObj({ ...itemObj, namaKec: namaKec, kodePemicu: itemObj.kode, daftarSubjek: [] });
+    setModalDetailObj({ 
+      ...itemObj, 
+      namaKec: namaKec, 
+      kodePemicu: itemObj.kode, 
+      tglSnapshot: itemObj.tanggal_snapshot, 
+      daftarSubjek: [] 
+    });
 
     try {
       const { data: sampelTarget, error } = await supabaseData
         .from('view_monitoring_anomali')
         .select('anomali_id, assignment_id, nama_subjek, nmdesa, nmsls, nama_pcl, pcl_email, link_fasih, kode_anomali, status_konfirmasi, catatan_lapangan, status_fasih')
         .eq('kdkec', itemObj.kdkec)
-        .eq('pml_email', itemObj.pml_email);
+        .eq('pml_email', itemObj.pml_email)
+        .eq('tanggal_snapshot', itemObj.tanggal_snapshot);
 
       if (error) throw error;
 
@@ -273,68 +354,41 @@ export default function DashboardKantor() {
     setUpdatingId(anomaliId);
     setKonfirmasiId(null);
     try {
-      const payload = {
-        anomali_id: anomaliId,
+      const targetSubjek = modalDetailObj.daftarSubjek.find(s => 
+        s.detailAnomali.some(a => a.anomali_id === anomaliId)
+      );
+      const detailAnomaliTarget = targetSubjek?.detailAnomali.find(a => a.anomali_id === anomaliId);
+      
+      if (!targetSubjek || !detailAnomaliTarget) throw new Error("Data lokal tidak sinkron");
+
+      const assignIdIdem = targetSubjek.assignment_id;
+      const kodeAnomaliIdem = detailAnomaliTarget.kode;
+
+      const { data: daftarKembar, error: errCari } = await supabaseData
+        .from('view_monitoring_anomali')
+        .select('anomali_id')
+        .eq('assignment_id', assignIdIdem)
+        .eq('kode_anomali', kodeAnomaliIdem);
+
+      if (errCari) throw errCari;
+
+      const listPayload = daftarKembar.map(item => ({
+        anomali_id: item.anomali_id,
         status_fasih: 'Sudah Tindak Lanjut FASIH',
         dieksekusi_oleh_email: profilUser?.email,
         waktu_eksekusi_fasih: new Date().toISOString()
-      };
-
-      const { error } = await supabaseData
-        .from('tindak_lanjut_anomali')
-        .upsert(payload, { onConflict: 'anomali_id' });
-
-      if (error) throw error;
-
-      setIdSelesaiLokal(prev => [...prev, anomaliId]);
-
-      const kodeAnomaliTerupdate = modalDetailObj.daftarSubjek
-        .flatMap(s => s.detailAnomali)
-        .find(a => a.anomali_id === anomaliId)?.kode;
-
-      setTreeData(prevTree => {
-        return prevTree.map(kec => {
-          if (kec.namaKec !== modalDetailObj.namaKec) return kec;
-          return {
-            ...kec,
-            pmlList: kec.pmlList.map(pml => {
-              if (pml.emailPml !== modalDetailObj.pml_email) return pml;
-              return {
-                ...pml,
-                kodeList: pml.kodeList.map(item => {
-                  if (item.kode !== kodeAnomaliTerupdate) return item;
-                  return {
-                    ...item,
-                    sudahFasih: item.sudahFasih + 1,
-                    belumFasih: Math.max(0, item.belumFasih - 1)
-                  };
-                })
-              };
-            })
-          };
-        });
-      });
-
-      setSummaryMetrics(prev => ({
-        ...prev,
-        sudahFasih: prev.sudahFasih + 1,
-        belumFasih: Math.max(0, prev.belumFasih - 1)
       }));
 
-      if (modalDetailObj) {
-        const grupTerbaru = modalDetailObj.daftarSubjek.map(subjek => {
-          return {
-            ...subjek,
-            detailAnomali: subjek.detailAnomali.map(anomali => {
-              if (anomali.anomali_id === anomaliId) {
-                return { ...anomali, status_fasih: 'Sudah Tindak Lanjut FASIH' };
-              }
-              return anomali;
-            })
-          };
-        });
-        setModalDetailObj(prev => ({ ...prev, daftarSubjek: grupTerbaru }));
-      }
+      const { error: errUpsert } = await supabaseData
+        .from('tindak_lanjut_anomali')
+        .upsert(listPayload, { onConflict: 'anomali_id' });
+
+      if (errUpsert) throw errUpsert;
+
+      alert('Berhasil memverifikasi data! Semua anomali serupa di tanggal snapshot lain otomatis diselesaikan.');
+      
+      await fetchDataMonitoringKantor();
+      handleTutupModal();
       
     } catch (err) {
       alert('Gagal memperbarui status: ' + err.message);
@@ -345,6 +399,11 @@ export default function DashboardKantor() {
 
   const toggleExpandKec = (kecName) => {
     setExpandedKec(prev => ({ ...prev, [kecName]: !prev[kecName] }));
+  };
+
+  const toggleExpandSnap = (kecKey, snapDate) => {
+    const compositeKey = `${kecKey}_${snapDate}`;
+    setExpandedSnap(prev => ({ ...prev, [compositeKey]: !prev[compositeKey] }));
   };
 
   const semuaSubjekModal = modalDetailObj?.daftarSubjek || [];
@@ -366,8 +425,7 @@ export default function DashboardKantor() {
     return true;
   });
 
-const subjekSiapTampil = [...subjekTersaring].sort((a, b) => {
-    // Deteksi apakah anomali murni siap atau baru saja selesai dieksekusi di sesi ini
+  const subjekSiapTampil = [...subjekTersaring].sort((a, b) => {
     const aSiapAtauBaruSelesai = a.detailAnomali.some(an => (an.catatan_lapangan && an.status_fasih !== 'Sudah Tindak Lanjut FASIH') || idSelesaiLokal.includes(an.anomali_id));
     const bSiapAtauBaruSelesai = b.detailAnomali.some(an => (an.catatan_lapangan && an.status_fasih !== 'Sudah Tindak Lanjut FASIH') || idSelesaiLokal.includes(an.anomali_id));
     
@@ -403,7 +461,7 @@ const subjekSiapTampil = [...subjekTersaring].sort((a, b) => {
           <div className="bg-white p-4 rounded-xl border border-stone-200 shadow-2xs">
             <span className="text-stone-400 text-[10px] font-bold block uppercase tracking-wider">Total Anomali</span>
             <span className="text-2xl font-black text-slate-800 mt-1 block font-mono">{summaryMetrics.totalAnomali}</span>
-            <span className="text-[10px] text-stone-500 font-medium mt-1 block">Basis data anomali masuk</span>
+            <span className="text-[10px] text-stone-500 font-medium mt-1 block">Total Anomali Keseluruhan</span>
           </div>
 
           <div className="bg-amber-50/50 p-4 rounded-xl border border-amber-200/50 shadow-2xs">
@@ -425,7 +483,7 @@ const subjekSiapTampil = [...subjekTersaring].sort((a, b) => {
                 {hitungPersen(summaryMetrics.sudahFasih, summaryMetrics.totalAnomali)}
               </span>
             </div>
-            <span className="text-[10px] text-emerald-900/60 font-medium mt-1 block">Selesai diverifikasi oleh kantor</span>
+            <span className="text-[10px] text-emerald-900/60 font-medium mt-1 block">Selesai ditindak lanjuti di Fasih</span>
           </div>
 
           <div className="bg-orange-50 border-2 border-orange-400/80 p-4 rounded-xl shadow-xs">
@@ -436,7 +494,7 @@ const subjekSiapTampil = [...subjekTersaring].sort((a, b) => {
                 {hitungPersen(summaryMetrics.belumFasih, summaryMetrics.sudahPcl)}
               </span>
             </div>
-            <span className="text-[10px] text-orange-900/70 font-medium mt-1 block">Rasio antrean dari konfirmasi PCL</span>
+            <span className="text-[10px] text-orange-900/70 font-medium mt-1 block">Sudah konfirmasi petugas tapi belum Fasih</span>
           </div>
         </div>
 
@@ -446,8 +504,8 @@ const subjekSiapTampil = [...subjekTersaring].sort((a, b) => {
             <h2 className="text-xs font-bold uppercase tracking-wider text-slate-500">Rekap Anomali</h2>
             <div className="flex flex-wrap items-center gap-2">
               <label className={`cursor-pointer inline-flex items-center gap-1.5 bg-amber-700 text-white font-bold px-3 py-1.5 rounded-lg text-xs hover:bg-amber-600 shadow-3xs transition-colors ${uploading ? 'opacity-50 pointer-events-none' : ''}`}>
-                <span>{uploading ? '⏳ Memproses...' : '📁 Impor Excel'}</span>
-                <input type="file" accept=".xlsx, .xls" onChange={handleUploadExcel} className="hidden" disabled={uploading} />
+                <span>📁 Impor Excel</span>
+                <input type="file" accept=".xlsx, .xls" onChange={handlePilihFileExcel} className="hidden" disabled={uploading} />
               </label>
               <button onClick={fetchDataMonitoringKantor} className="bg-white border text-xs text-amber-800 font-bold px-3 py-1.5 rounded-lg hover:bg-stone-50 shadow-3xs">🔄 Segarkan Progres</button>
             </div>
@@ -471,15 +529,18 @@ const subjekSiapTampil = [...subjekTersaring].sort((a, b) => {
                   const isKecOpen = !!expandedKec[kec.namaKec];
                   let kecTotal = 0, kecSudahPcl = 0, kecBelumPcl = 0, kecSudahF = 0, kecBelumF = 0;
 
-                  kec.pmlList.forEach(p => {
-                    p.kodeList.forEach(c => {
-                      kecTotal += c.total; kecSudahPcl += c.sudahPcl; kecBelumPcl += c.belumPcl;
-                      kecSudahF += c.sudahFasih; kecBelumF += c.belumFasih;
+                  kec.snapshotList.forEach(s => {
+                    s.pmlList.forEach(p => {
+                      p.kodeList.forEach(c => {
+                        kecTotal += c.total; kecSudahPcl += c.sudahPcl; kecBelumPcl += c.belumPcl;
+                        kecSudahF += c.sudahFasih; kecBelumF += c.belumFasih;
+                      });
                     });
                   });
 
                   return (
                     <React.Fragment key={kec.kodeKec}>
+                      {/* TINGKAT 1: BARIS KECAMATAN */}
                       <tr onClick={() => toggleExpandKec(kec.namaKec)} className="bg-stone-50/80 hover:bg-amber-50/20 font-bold text-slate-900 cursor-pointer transition-colors border-b border-stone-200">
                         <td className="p-3 pl-6"><span className="text-amber-700 mr-2">{isKecOpen ? '▼' : '▶'}</span>🗺️ [{kec.kodeKec}] KEC. {kec.namaKec}</td>
                         <td className="p-3 text-center text-stone-300">-</td>
@@ -490,43 +551,79 @@ const subjekSiapTampil = [...subjekTersaring].sort((a, b) => {
                         <td className="p-3 text-center bg-orange-50/10 font-mono text-orange-700">{kecBelumF}</td>
                       </tr>
 
-                      {isKecOpen && kec.pmlList.map(pml => (
-                        <React.Fragment key={pml.namaPml}>
-                          <tr className="bg-white font-semibold text-slate-800 border-b border-stone-100">
-                            <td className="p-2.5 pl-12 text-slate-800">👔 Pengawas (PML): <span className="font-bold text-amber-900">{pml.namaPml}</span></td>
-                            <td colSpan="6" className="p-2.5 text-stone-400 text-[10px] font-mono italic">{pml.emailPml}</td>
-                          </tr>
+                      {isKecOpen && kec.snapshotList.map(snap => {
+                        const snapKey = `${kec.kodeKec}_${snap.tglSnapshot}`;
+                        const isSnapOpen = !!expandedSnap[snapKey];
 
-                          {pml.kodeList.map(item => {
-                            const adaAntreanFasih = item.belumFasih > 0;
-                            return (
-                              <tr
-                                key={item.kode}
-                                onClick={() => handleBukaModalDetail(item, kec.namaKec)}
-                                className={`text-xs border-b border-stone-100 transition-colors cursor-pointer select-none ${adaAntreanFasih ? 'bg-orange-50/40 hover:bg-orange-50' : 'hover:bg-stone-50/50 text-slate-500'}`}
-                              >
-                                <td className="p-2.5 pl-20 font-medium truncate flex items-center gap-1.5">
-                                  <span className="text-slate-300 font-bold">└</span>
-                                  {adaAntreanFasih && (
-                                    <span className="bg-orange-600 text-white font-black text-[8px] px-1.5 py-0.2 rounded-md animate-pulse tracking-wide shrink-0">BUTUH INPUT</span>
-                                  )}
-                                  <span className={adaAntreanFasih ? 'font-bold text-slate-900' : ''}>
-                                    {getInfoAnomali(item.kode, 'deskripsi')}
-                                  </span>
-                                </td>
-                                <td className="p-2.5 text-center">
-                                  <span className={`font-mono font-black px-1.5 py-0.5 rounded text-[10px] ${adaAntreanFasih ? 'bg-orange-200 text-orange-900' : 'bg-stone-100 text-stone-600'}`}>{item.kode}</span>
-                                </td>
-                                <td className="p-2.5 text-center font-mono">{item.total}</td>
-                                <td className="p-2.5 text-center bg-amber-50/10 font-mono text-amber-700 font-medium">{item.sudahPcl}</td>
-                                <td className="p-2.5 text-center bg-amber-50/10 font-mono text-stone-400 border-r border-stone-200/60">{item.belumPcl}</td>
-                                <td className="p-2.5 text-center bg-emerald-50/5 font-mono text-emerald-700 font-medium">{item.sudahFasih}</td>
-                                <td className={`p-2.5 text-center font-mono font-black ${adaAntreanFasih ? 'text-orange-700 bg-orange-100/40' : 'text-stone-400'}`}>{adaAntreanFasih ? `⚠️ ${item.belumFasih}` : '0'}</td>
-                              </tr>
-                            );
-                          })}
-                        </React.Fragment>
-                      ))}
+                        let snapTotal = 0, snapSudahPcl = 0, snapBelumPcl = 0, snapSudahF = 0, snapBelumF = 0;
+                        snap.pmlList.forEach(p => {
+                          p.kodeList.forEach(c => {
+                            snapTotal += c.total; snapSudahPcl += c.sudahPcl; snapBelumPcl += c.belumPcl;
+                            snapSudahF += c.sudahFasih; snapBelumF += c.belumFasih;
+                          });
+                        });
+
+                        return (
+                          <React.Fragment key={snap.tglSnapshot}>
+                            {/* TINGKAT 2: BARIS SNAPSHOT DENGAN FITUR TOGGLE ARROW & RINGKASAN TOTAL */}
+                            <tr 
+                              onClick={() => toggleExpandSnap(kec.kodeKec, snap.tglSnapshot)}
+                              className="bg-amber-50/30 text-slate-700 border-b border-stone-100 font-semibold text-xs cursor-pointer hover:bg-amber-100/40 select-none transition-colors"
+                            >
+                              <td className="p-2 pl-10 text-[11px] text-amber-900 tracking-wide uppercase font-bold">
+                                <span className="text-amber-800 mr-2 inline-block transition-transform">{isSnapOpen ? '▼' : '▶'}</span>
+                                📅 Tanggal Anomali: <span className="font-black underline">{formatTanggalIndo(snap.tglSnapshot)}</span>
+                              </td>
+                              <td className="p-2 text-center text-stone-300">-</td>
+                              <td className="p-2 text-center font-mono text-[11px] text-amber-950 font-bold">{snapTotal}</td>
+                              <td className="p-2 text-center font-mono text-[11px] text-amber-700 font-bold">{snapSudahPcl}</td>
+                              <td className="p-2 text-center font-mono text-[11px] text-orange-600 font-bold border-r border-stone-200/60">{snapBelumPcl}</td>
+                              <td className="p-2 text-center font-mono text-[11px] text-emerald-700 font-bold">{snapSudahF}</td>
+                              <td className="p-2 text-center font-mono text-[11px] text-orange-700 font-bold">{snapBelumF}</td>
+                            </tr>
+
+                            {isSnapOpen && snap.pmlList.map(pml => (
+                              <React.Fragment key={pml.namaPml}>
+                                {/* TINGKAT 3: BARIS DATA PML */}
+                                <tr className="bg-white font-medium text-slate-800 border-b border-stone-100 text-xs">
+                                  <td className="p-2 pl-14 text-slate-700">└─ 👔 Pengawas (PML): <span className="font-bold text-slate-900">{pml.namaPml}</span></td>
+                                  <td colSpan="6" className="p-2 text-stone-400 text-[10px] font-mono italic">{pml.emailPml}</td>
+                                </tr>
+
+                                {/* TINGKAT 4: BARIS INDIVIDU KODE ANOMALI */}
+                                {pml.kodeList.map(item => {
+                                  const adaAntreanFasih = item.belumFasih > 0;
+                                  return (
+                                    <tr
+                                      key={item.kode}
+                                      onClick={() => handleBukaModalDetail(item, kec.namaKec)}
+                                      className={`text-xs border-b border-stone-100 transition-colors cursor-pointer select-none ${adaAntreanFasih ? 'bg-orange-50/40 hover:bg-orange-50' : 'hover:bg-stone-50/50 text-slate-500'}`}
+                                    >
+                                      <td className="p-2.5 pl-24 font-medium truncate flex items-center gap-1.5">
+                                        <span className="text-stone-300 font-bold">└─</span>
+                                        {adaAntreanFasih && (
+                                          <span className="bg-orange-600 text-white font-black text-[8px] px-1.5 py-0.2 rounded-md animate-pulse tracking-wide shrink-0">BUTUH INPUT</span>
+                                        )}
+                                        <span className={adaAntreanFasih ? 'font-bold text-slate-900' : ''}>
+                                          {getInfoAnomali(item.kode, 'deskripsi')}
+                                        </span>
+                                      </td>
+                                      <td className="p-2.5 text-center">
+                                        <span className={`font-mono font-black px-1.5 py-0.5 rounded text-[10px] ${adaAntreanFasih ? 'bg-orange-200 text-orange-900' : 'bg-stone-100 text-stone-600'}`}>{item.kode}</span>
+                                      </td>
+                                      <td className="p-2.5 text-center font-mono">{item.total}</td>
+                                      <td className="p-2.5 text-center bg-amber-50/10 font-mono text-amber-700 font-medium">{item.sudahPcl}</td>
+                                      <td className="p-2.5 text-center bg-amber-50/10 font-mono text-stone-400 border-r border-stone-200/60">{item.belumPcl}</td>
+                                      <td className="p-2.5 text-center bg-emerald-50/5 font-mono text-emerald-700 font-medium">{item.sudahFasih}</td>
+                                      <td className={`p-2.5 text-center font-mono font-black ${adaAntreanFasih ? 'text-orange-700 bg-orange-100/40' : 'text-stone-400'}`}>{adaAntreanFasih ? `⚠️ ${item.belumFasih}` : '0'}</td>
+                                    </tr>
+                                  );
+                                })}
+                              </React.Fragment>
+                            ))}
+                          </React.Fragment>
+                        );
+                      })}
                     </React.Fragment>
                   );
                 })}
@@ -535,6 +632,99 @@ const subjekSiapTampil = [...subjekTersaring].sort((a, b) => {
           </div>
         </div>
       </div>
+
+      {/* MODAL PROSES & REVIEW IMPOR EXCEL CERDAS */}
+      {modalUploadReview && (
+        <div className="fixed inset-0 bg-slate-950/70 z-50 flex items-center justify-center p-4 backdrop-blur-xs animate-fade-in">
+          <div className="bg-white w-full max-w-md rounded-2xl border border-stone-200 p-6 shadow-2xl space-y-5 animate-scale-up">
+            
+            <div className="flex items-center gap-2.5 text-amber-800 border-b pb-3">
+              <span className="text-xl">📊</span>
+              <h3 className="text-sm font-black uppercase tracking-wider text-slate-800">Manajer Snapshot Excel</h3>
+            </div>
+
+            {/* KONDISI 1: FORMULIR ATUR TANGGAL & RINGKASAN SEBELUM PROSES */}
+            {uploadProgressStatus === 'membaca' && (
+              <div className="space-y-4">
+                <div className="bg-stone-50 border p-3.5 rounded-xl space-y-1.5 shadow-inner">
+                  <span className="text-[10px] text-stone-400 block uppercase font-bold tracking-wider">Hasil Pemindaian File:</span>
+                  <p className="text-xs text-slate-700 font-medium">Total Baris Anomali Terdeteksi: <strong className="text-amber-800 font-mono text-sm font-black">{rawExcelData?.length || 0}</strong> Baris Rekord.</p>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-[10px] font-bold text-slate-500 block uppercase tracking-wide">Tentukan Tanggal Snapshot Data:</label>
+                  <input 
+                    type="date" 
+                    value={pilihanTanggalSnapshot} 
+                    onChange={(e) => setPilihanTanggalSnapshot(e.target.value)}
+                    className="w-full bg-white border border-stone-300 rounded-lg p-2 text-xs font-mono font-bold text-slate-800 focus:outline-amber-600"
+                  />
+                  <p className="text-[10px] text-stone-400/80 italic font-medium mt-1">Sistem akan mengelompokkan data ini sesuai folder tanggal yang Anda tentukan di atas.</p>
+                </div>
+
+                <div className="flex justify-end gap-2 pt-3 border-t text-xs font-bold">
+                  <button 
+                    type="button" 
+                    onClick={() => { setModalUploadReview(false); setUploading(false); }} 
+                    className="bg-stone-100 hover:bg-stone-200 text-slate-700 px-4 py-2 rounded-xl border"
+                  >
+                    Batal
+                  </button>
+                  <button 
+                    type="button" 
+                    onClick={handleEksekusiUploadKeDatabase} 
+                    className="bg-amber-700 hover:bg-amber-600 text-white px-5 py-2 rounded-xl shadow-md shadow-amber-900/20"
+                  >
+                    🚀 Jalankan Sinkronisasi
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* KONDISI 2: TAMPILAN PROGRES INTERAKTIF SAAT PROSES DATA */}
+            {uploadProgressStatus === 'mengirim' && (
+              <div className="py-8 flex flex-col items-center justify-center space-y-4">
+                <div className="w-12 h-12 border-4 border-amber-700/20 border-t-amber-700 rounded-full animate-spin"></div>
+                <div className="text-center space-y-1">
+                  <p className="text-xs font-black text-slate-800 tracking-wide animate-pulse">Menghubungkan ke Database...</p>
+                  <p className="text-[10px] text-stone-400 font-medium">Memproses pencocokan data historis untuk mendeteksi anomali berulang.</p>
+                </div>
+              </div>
+            )}
+
+            {/* KONDISI 3: HASIL PROGRES FINAL (TOTAL SUKSES DAN TOTAL ERROR) */}
+            {uploadProgressStatus === 'selesai' && hasilUploadRingkasan && (
+              <div className="space-y-4">
+                <div className="grid grid-cols-2 gap-3 text-center">
+                  <div className="bg-emerald-50 border border-emerald-200 p-3 rounded-xl shadow-3xs">
+                    <span className="text-[10px] text-emerald-800 font-bold uppercase block tracking-wide">Sukses Terproses</span>
+                    <span className="text-2xl font-black text-emerald-700 font-mono block mt-1">{hasilUploadRingkasan.sukses}</span>
+                  </div>
+                  <div className="bg-rose-50 border border-rose-200 p-3 rounded-xl shadow-3xs">
+                    <span className="text-[10px] text-rose-800 font-bold uppercase block tracking-wide">Gagal / Format Error</span>
+                    <span className="text-2xl font-black text-rose-700 font-mono block mt-1">{hasilUploadRingkasan.gagal}</span>
+                  </div>
+                </div>
+
+                <blockquote className="bg-stone-50 border-l-4 border-amber-600 p-3 rounded text-[11px] leading-relaxed font-medium text-slate-600">
+                  Sinkronisasi snapshot tanggal <span className="font-bold text-slate-900 font-mono">{formatTanggalIndo(pilihanTanggalSnapshot)}</span> selesai. Grafik rekap anomali wilayah telah dimutakhirkan.
+                </blockquote>
+
+                <div className="flex justify-end pt-2 border-t text-xs font-bold">
+                  <button 
+                    type="button" 
+                    onClick={() => { setModalUploadReview(false); setUploading(false); }} 
+                    className="bg-slate-900 hover:bg-slate-800 text-white px-6 py-2 rounded-xl shadow-sm"
+                  >
+                    Selesai & Tutup Jendela
+                  </button>
+                </div>
+              </div>
+            )}
+
+          </div>
+        </div>
+      )}
 
       {/* MODAL DETAIL SUBJEK & SINKRONISASI FASIH */}
       {modalDetailObj && (
@@ -582,16 +772,31 @@ const subjekSiapTampil = [...subjekTersaring].sort((a, b) => {
               ) : (
                 subjekSiapTampil.map(subjek => (
                   <div key={subjek.assignment_id} className="bg-white rounded-xl border border-stone-200 shadow-3xs overflow-hidden">
-                    <div className="bg-stone-50 border-b border-stone-200 p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-                      <div>
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <h4 className="font-extrabold text-slate-900 text-sm sm:text-base">🧑 {subjek.nama_subjek}</h4>
-                          <span className="text-[10px] bg-white font-mono text-slate-500 px-2 py-0.5 rounded border">ID: {subjek.assignment_id}</span>
+                    <div className="bg-gradient-to-r from-stone-700 to-stone-500 border-b border-stone-200 p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                      <div className="space-y-1.5 flex-1">
+                        <div className="flex items-center gap-2.5 flex-wrap">
+                          {/* Label Ikon Kategori Kepala RT/Usaha */}
+                          <span className="bg-white/10 text-stone-100 px-2 py-0.5 rounded-md text-[11px] font-bold uppercase tracking-wider border border-white/15 backdrop-blur-xs shadow-3xs">
+                            🧑
+                          </span>
+                          <h4 className="font-black text-white text-sm sm:text-base tracking-tight drop-shadow-xs">
+                            {subjek.nama_subjek}
+                          </h4>
+                                                    <span className="bg-stone-900/40 px-2 py-0.5 rounded font-mono font-bold text-amber-300 text-[11px] border border-stone-900/20">
+                            ID: {subjek.assignment_id}
+                          </span>
                         </div>
-                        <div className="text-xs text-slate-500 font-medium flex flex-wrap gap-x-4 gap-y-0.5 mt-1">
-                          <p>Desa: <span className="text-slate-700 font-bold">{subjek.nmdesa}</span></p>
-                          <p>SLS: <span className="text-slate-700 font-bold">{subjek.nmsls}</span></p>
-                          <p>PCL: <span className="text-slate-700 font-bold">{subjek.nama_pcl}</span></p>
+                        
+                        {/* Meta metadata area dengan badge tersendiri */}
+                        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-stone-200/90 font-medium">
+
+                          <div className="flex items-center gap-3 flex-wrap opacity-95">
+                            <p className="flex items-center gap-1">📍 Desa: <span className="text-white font-extrabold">{subjek.nmdesa}</span></p>
+                            <p className="text-stone-400/80 hidden sm:inline">•</p>
+                            <p className="flex items-center gap-1">🗺️ SLS: <span className="text-white font-extrabold">{subjek.nmsls}</span></p>
+                            <p className="text-stone-400/80 hidden sm:inline">•</p>
+                            <p className="flex items-center gap-1">💼 PCL: <span className="text-white font-extrabold">{subjek.nama_pcl}</span></p>
+                          </div>
                         </div>
                       </div>
                       {subjek.link_fasih && (
@@ -632,7 +837,7 @@ const subjekSiapTampil = [...subjekTersaring].sort((a, b) => {
                                 <span className="text-xs font-bold text-slate-700">{getInfoAnomali(anomali.kode, 'deskripsi')}</span>
                                 
                                 {isPemicuUtama ? (
-                                  <span className="text-[9px] font-black bg-amber-700 text-white px-1.5 py-0.5 rounded shadow-3xs">TARGET DIPILIH</span>
+                                  <span className="text-[9px] font-black bg-amber-700 text-white px-1.5 py-0.5 rounded shadow-3xs">ANOMALI DIPILIH</span>
                                 ) : (
                                   <span className="text-[9px] font-black bg-stone-500 text-white px-1.5 py-0.5 rounded shadow-3xs">ANOMALI LAINNYA</span>
                                 )}

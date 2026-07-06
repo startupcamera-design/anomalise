@@ -8,7 +8,7 @@ export default function DashboardLapangan() {
   const [loading, setLoading] = useState(true);
   const [showPanduanModal, setShowPanduanModal] = useState(true);
 
-  // 💡 DATA REFERENSI ATURAN (DINAMIS DARI DATABASE - HEMAT EGRESS)
+  // DATA REFERENSI ATURAN
   const [masterAnomali, setMasterAnomali] = useState([]);
 
   // Data Hirarki Lapangan
@@ -24,14 +24,18 @@ export default function DashboardLapangan() {
   const [catatanLapanganForm, setCatatanLapanganForm] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
-  // 💡 FUNGSI PEMBANTU UNTUK MENERJEMAHKAN KODE ANOMALI SECARA DINAMIS
+  const formatTanggalIndo = (stringTanggal) => {
+    if (!stringTanggal || stringTanggal === '0000-00-00') return "-";
+    const opsi = { day: '2-digit', month: 'short' };
+    return new Date(stringTanggal).toLocaleDateString('id-ID', opsi);
+  };
+
   const getInfoAnomali = (kode, tipe = 'deskripsi') => {
     const target = masterAnomali.find(a => a.kode === kode);
     if (!target) return kode;
     return tipe === 'deskripsi' ? target.deskripsi : target.aturan_teknis;
   };
 
-  // 💡 AMBIL DATA KAMUS ATURAN (Hanya ditarik 1 kali di awal, ukuran sangat kecil ~2 KB)
   const fetchMasterAnomali = async () => {
     try {
       const { data, error } = await supabaseData
@@ -62,7 +66,6 @@ export default function DashboardLapangan() {
 
       const listPclEmails = pclData.map(p => p.email);
 
-      // HEMAT EGRESS: Gunakan .in() dan pilih kolom seminimal mungkin
       const { data: slsData } = await supabaseData
         .from('muatan_sls')
         .select('idsubsls, petugas_id')
@@ -70,20 +73,30 @@ export default function DashboardLapangan() {
 
       const { data: anomaliData } = await supabaseData
         .from('view_monitoring_anomali')
-        .select('idsubsls, status_konfirmasi, pml_email')
-        .eq('pml_email', pmlEmail); // Filter langsung di query database
+        .select('idsubsls, status_konfirmasi, pml_email, assignment_id, kode_anomali, tanggal_snapshot')
+        .eq('pml_email', pmlEmail);
 
       const mappedPcl = pclData.map(pcl => {
         const slsOwns = slsData ? slsData.filter(s => s.petugas_id === pcl.email).map(s => s.idsubsls) : [];
         const anomaliOwns = anomaliData ? anomaliData.filter(a => slsOwns.includes(a.idsubsls)) : [];
-        const total = anomaliOwns.length;
-        const belumSelesai = anomaliOwns.filter(a => a.status_konfirmasi === 'Belum Tindak Lanjut').length;
+        
+        // UNIKKAN PENGHITUNGAN BEBAN: Hitung per kelompok masalah unik (assignment_id + kode) bukan total record snapshot
+        const kunciUnikSet = new Set(anomaliOwns.map(a => `${a.assignment_id}_${a.kode_anomali}`));
+        const totalMasalahUnik = kunciUnikSet.size;
+
+        // Hitung yang belum tuntas dikonfirmasi pada kelompok masalah unik tersebut
+        let belumSelesaiUnik = 0;
+        kunciUnikSet.forEach(kunci => {
+          const barisTerkait = anomaliOwns.filter(a => `${a.assignment_id}_${a.kode_anomali}` === kunci);
+          const adaYangBelum = barisTerkait.some(b => b.status_konfirmasi === 'Belum Tindak Lanjut');
+          if (adaYangBelum) belumSelesaiUnik++;
+        });
 
         return {
           ...pcl,
-          totalBeban: total,
-          belumSelesai: belumSelesai,
-          sudahSelesai: total - belumSelesai,
+          totalBeban: totalMasalahUnik,
+          belumSelesai: belumSelesaiUnik,
+          sudahSelesai: Math.max(0, totalMasalahUnik - belumSelesaiUnik),
           jumlahSls: slsOwns.length
         };
       });
@@ -116,18 +129,27 @@ export default function DashboardLapangan() {
       const arrayIdSls = slsData.map(s => String(s.idsubsls).trim());
       const { data: anomaliSummary, error: anoErr } = await supabaseData
         .from('view_monitoring_anomali')
-        .select('idsubsls, status_konfirmasi')
+        .select('idsubsls, status_konfirmasi, assignment_id, kode_anomali')
         .in('idsubsls', arrayIdSls);
 
       if (anoErr) throw anoErr;
 
       const slsMapped = slsData.map(sls => {
         const itemAnomali = anomaliSummary ? anomaliSummary.filter(a => a.idsubsls === sls.idsubsls) : [];
-        const belumSelesai = itemAnomali.filter(a => a.status_konfirmasi === 'Belum Tindak Lanjut').length;
+        const kunciUnikSet = new Set(itemAnomali.map(a => `${a.assignment_id}_${a.kode_anomali}`));
+        
+        let belumSelesaiUnik = 0;
+        kunciUnikSet.forEach(kunci => {
+          const barisTerkait = itemAnomali.filter(a => `${a.assignment_id}_${a.kode_anomali}` === kunci);
+          if (barisTerkait.some(b => b.status_konfirmasi === 'Belum Tindak Lanjut')) {
+            belumSelesaiUnik++;
+          }
+        });
+
         return {
           ...sls,
-          totalAnomali: itemAnomali.length,
-          belumSelesai: belumSelesai
+          totalAnomali: kunciUnikSet.size,
+          belumSelesai: belumSelesaiUnik
         };
       });
 
@@ -140,14 +162,14 @@ export default function DashboardLapangan() {
     }
   };
 
-  // --- 3. LOAD DETAIL ANOMALI (Hanya menarik kolom esensial) ---
+  // --- 3. LOAD DETAIL ANOMALI (MENGGABUNGKAN DATA SNAPSHOT KEMBAR KE SATU HIERARKI RUTA) ---
   const loadDetailAnomaliSls = async (slsObj) => {
     setSelectedSls(slsObj);
     setLoading(true);
     try {
       const { data, error } = await supabaseData
         .from('view_monitoring_anomali')
-        .select('anomali_id, assignment_id, nama_subjek, kode_anomali, kategori_anomali, status_konfirmasi, catatan_lapangan')
+        .select('anomali_id, assignment_id, nama_subjek, kode_anomali, kategori_anomali, status_konfirmasi, catatan_lapangan, tanggal_snapshot')
         .eq('idsubsls', slsObj.idsubsls);
 
       if (error) throw error;
@@ -160,7 +182,7 @@ export default function DashboardLapangan() {
             nama_keluarga_krt: '', 
             nama_unit_usaha: '',   
             fallback_nama: item.nama_subjek, 
-            daftar_error: []
+            daftar_error_grup: {} // Gunakan objek map internal untuk melebur kode yang sama lintas tanggal
           };
         }
 
@@ -170,16 +192,45 @@ export default function DashboardLapangan() {
           grupRuta[item.assignment_id].nama_unit_usaha = item.nama_subjek;
         }
 
-        grupRuta[item.assignment_id].daftar_error.push({
+        const compositeErrorKey = item.kode_anomali;
+
+        // Jika kode anomali untuk subjek ini belum terdaftar di grup internal, buat template wadahnya
+        if (!grupRuta[item.assignment_id].daftar_error_grup[compositeErrorKey]) {
+          grupRuta[item.assignment_id].daftar_error_grup[compositeErrorKey] = {
+            kode_anomali: item.kode_anomali,
+            kategori: item.kategori_anomali,
+            // Status konfirmasi default mengacu ke yang terupdate
+            status_konfirmasi: item.status_konfirmasi || 'Belum Tindak Lanjut',
+            catatan_lapangan: item.catatan_lapangan || '',
+            // KUMPULAN LINIMASA: Simpan array semua anomali_id dan tanggal snapshot kemunculannya
+            snapshots: [] 
+          };
+        }
+
+        // Masukkan data snapshot spesifik baris ini ke dalam list linimasa wadah induknya
+        grupRuta[item.assignment_id].daftar_error_grup[compositeErrorKey].snapshots.push({
           anomali_id: item.anomali_id,
-          kode_anomali: item.kode_anomali,
-          kategori: item.kategori_anomali,
-          status_konfirmasi: item.status_konfirmasi || 'Belum Tindak Lanjut',
-          catatan_lapangan: item.catatan_lapangan || ''
+          tanggal_snapshot: item.tanggal_snapshot,
+          status_konfirmasi: item.status_konfirmasi || 'Belum Tindak Lanjut'
         });
+
+        // Failsafe status: Jika salah satu snapshot ada yang masih 'Belum Tindak Lanjut', pastikan status luar grup menjadi 'Belum Tindak Lanjut'
+        if (item.status_konfirmasi === 'Belum Tindak Lanjut') {
+          grupRuta[item.assignment_id].daftar_error_grup[compositeErrorKey].status_konfirmasi = 'Belum Tindak Lanjut';
+        }
       });
 
-      setDaftarAnomaliRuta(Object.values(grupRuta));
+      // Konversikan Map objek internal `daftar_error_grup` kembali menjadi Array tersarang yang siap dirender
+      const finalRutaFlattened = Object.values(grupRuta).map(ruta => ({
+        ...ruta,
+        daftar_error: Object.values(ruta.daftar_error_grup).map(errGrup => ({
+          ...errGrup,
+          // Urutkan rentang tanggal snapshot dari yang paling awal ke yang terbaru
+          snapshots: errGrup.snapshots.sort((a, b) => String(a.tanggal_snapshot).localeCompare(String(b.tanggal_snapshot)))
+        }))
+      }));
+
+      setDaftarAnomaliRuta(finalRutaFlattened);
     } catch (err) {
       alert(err.message);
     } finally {
@@ -191,7 +242,6 @@ export default function DashboardLapangan() {
     if (!profilUser?.email) return;
 
     const siapkanWorkspaceData = async () => {
-      // Ambil data referensi aturan dari DB terlebih dahulu
       await fetchMasterAnomali();
 
       if (profilUser.role === 'PML') {
@@ -205,45 +255,60 @@ export default function DashboardLapangan() {
     siapkanWorkspaceData();
   }, [profilUser?.email, profilUser?.role]);
 
-  // --- 4. SAVE TINDAK LANJUT (ZERO-EGRESS STATE UPDATE) ---
-  const handleOpenActionModal = (subAnomali, namaSubjek) => {
-    setEditingAnomali({ ...subAnomali, nama_subjek: namaSubjek });
+  const handleOpenActionModal = (subAnomali, namaSubjek, assignmentId) => {
+    // Masukkan info assignment_id ke objek editing untuk pelacakan massal
+    setEditingAnomali({ ...subAnomali, nama_subjek: namaSubjek, assignment_id: assignmentId });
     setStatusKonfirmasiForm(subAnomali.status_konfirmasi === 'Belum Tindak Lanjut' ? 'Sesuai Kondisi Lapangan' : subAnomali.status_konfirmasi);
     setCatatanLapanganForm(subAnomali.catatan_lapangan);
   };
 
+  // --- 4. SAVE TINDAK LANJUT DENGAN EFEK DOMINO OTOMATIS LINIMASA ---
   const handleSaveTindakLanjut = async () => {
     if (!catatanLapanganForm.trim()) return alert('Catatan lapangan/konfirmasi wajib diisi!');
     setSubmitting(true);
     try {
+      // 1. Susun daftar payload massal untuk seluruh ID snapshot kembar yang ada di linimasa anomali ini
+      const payloadMassal = editingAnomali.snapshots.map(snap => ({
+        anomali_id: snap.anomali_id,
+        status_konfirmasi: statusKonfirmasiForm,
+        catatan_lapangan: catatanLapanganForm,
+        dkonfirmasi_oleh_email: profilUser?.email,
+        tanggal_konfirmasi: new Date().toISOString()
+      }));
+
+      // 2. Eksekusi UPSERT massal sekaligus ke Supabase
       const { error } = await supabaseData
         .from('tindak_lanjut_anomali')
-        .upsert({
-          anomali_id: editingAnomali.anomali_id,
-          status_konfirmasi: statusKonfirmasiForm,
-          catatan_lapangan: catatanLapanganForm,
-          dkonfirmasi_oleh_email: profilUser?.email,
-          tanggal_konfirmasi: new Date().toISOString()
-        }, { onConflict: 'anomali_id' });
+        .upsert(payloadMassal, { onConflict: 'anomali_id' });
 
       if (error) throw error;
 
-      // Mutasi State Lokal Secara Real-time (0 KB Egress, Tanpa Query Ulang Database)
+      // Evaluasi apakah status awal dari kelompok ini memang benar-benar belum pernah disentuh
+      const statusAwalKelompokBelumTuntas = editingAnomali.status_konfirmasi === 'Belum Tindak Lanjut';
+
+      // 3. REALTIME UPDATE STATE PETUGAS LAPANGAN LINTAS LINIMASA SNAPSHOT (0 KB EGRESS)
       setDaftarAnomaliRuta(prevRuta => 
-        prevRuta.map(ruta => ({
-          ...ruta,
-          daftar_error: ruta.daftar_error.map(err => 
-            err.anomali_id === editingAnomali.anomali_id 
-              ? { ...err, status_konfirmasi: statusKonfirmasiForm, catatan_lapangan: catatanLapanganForm }
-              : err
-          )
-        }))
+        prevRuta.map(ruta => {
+          if (ruta.assignment_id !== editingAnomali.assignment_id) return ruta;
+          return {
+            ...ruta,
+            daftar_error: ruta.daftar_error.map(err => {
+              if (err.kode_anomali !== editingAnomali.kode_anomali) return err;
+              return {
+                ...err,
+                status_konfirmasi: statusKonfirmasiForm,
+                catatan_lapangan: catatanLapanganForm,
+                snapshots: err.snapshots.map(s => ({ ...s, status_konfirmasi: statusKonfirmasiForm }))
+              };
+            })
+          };
+        })
       );
 
       setDaftarSls(prevSls => 
         prevSls.map(sls => 
           sls.idsubsls === selectedSls?.idsubsls 
-            ? { ...sls, belumSelesai: Math.max(0, sls.belumSelesai - (editingAnomali.status_konfirmasi === 'Belum Tindak Lanjut' ? 1 : 0)) }
+            ? { ...sls, belumSelesai: Math.max(0, sls.belumSelesai - (statusAwalKelompokBelumTuntas ? 1 : 0)) }
             : sls
         )
       );
@@ -254,8 +319,8 @@ export default function DashboardLapangan() {
             p.email === selectedPcl.email 
               ? { 
                   ...p, 
-                  sudahSelesai: p.sudahSelesai + (editingAnomali.status_konfirmasi === 'Belum Tindak Lanjut' ? 1 : 0),
-                  belumSelesai: Math.max(0, p.belumSelesai - (editingAnomali.status_konfirmasi === 'Belum Tindak Lanjut' ? 1 : 0))
+                  sudahSelesai: p.sudahSelesai + (statusAwalKelompokBelumTuntas ? 1 : 0),
+                  belumSelesai: Math.max(0, p.belumSelesai - (statusAwalKelompokBelumTuntas ? 1 : 0))
                 }
               : p
           )
@@ -264,7 +329,7 @@ export default function DashboardLapangan() {
 
       setEditingAnomali(null);
     } catch (err) {
-      alert('Gagal menyimpan: ' + err.message);
+      alert('Gagal menyimpan konfirmasi lapangan: ' + err.message);
     } finally {
       setSubmitting(false);
     }
@@ -329,15 +394,15 @@ export default function DashboardLapangan() {
 
                   <div className="grid grid-cols-3 gap-1.5 text-center pt-4 mt-3 border-t border-stone-100 text-[11px]">
                     <div className="bg-stone-50 p-2 rounded-lg border border-stone-100">
-                      <span className="text-stone-400 text-[9px] font-bold block uppercase tracking-wide">Jumlah Anomali</span>
+                      <span className="text-stone-400 text-[9px] font-bold block uppercase tracking-wide">Beban Unik</span>
                       <span className="font-extrabold text-slate-800">{pcl.totalBeban}</span>
                     </div>
                     <div className="bg-emerald-50/50 p-2 rounded-lg border border-emerald-100">
-                      <span className="text-emerald-600 text-[9px] font-bold block uppercase tracking-wide">Sudah Konfirmasi</span>
+                      <span className="text-emerald-600 text-[9px] font-bold block uppercase tracking-wide">Sudah Konf</span>
                       <span className="font-extrabold text-emerald-700">{pcl.sudahSelesai}</span>
                     </div>
                     <div className={`p-2 rounded-lg border ${pcl.belumSelesai > 0 ? 'bg-orange-50 border-orange-200 text-orange-700' : 'bg-stone-50 text-stone-400'}`}>
-                      <span className="text-[9px] font-bold block uppercase tracking-wide">Belum Konfirmasi</span>
+                      <span className="text-[9px] font-bold block uppercase tracking-wide">Belum Konf</span>
                       <span className="font-black">⚠️ {pcl.belumSelesai}</span>
                     </div>
                   </div>
@@ -367,7 +432,7 @@ export default function DashboardLapangan() {
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                 {daftarSls.map(sls => (
-                  <div key={sls.idsubsls} onClick={() => loadDetailAnomaliSls(sls)} className="bg-white rounded-xl p-4 border border-stone-200 shadow-xs hover:border-amber-500 hover:shadow-md cursor-pointer transition-all flex justify-between items-center group">
+                  <div key={sls.idsubsls} onClick={() => loadDetailAnomaliSls(sls)} className="bg-white rounded-xl p-4 border border-stone-200 shadow-xs hover:shadow-md hover:border-amber-500 hover:shadow-md cursor-pointer transition-all flex justify-between items-center group">
                     <div className="space-y-1">
                       <h3 className="text-sm font-bold text-slate-900 group-hover:text-amber-800 transition-colors leading-snug">{sls.nmsls}</h3>
                       <p className="text-xs text-slate-500 font-medium">Desa {sls.nmdesa}, Kec. {sls.nmkec}</p>
@@ -375,7 +440,7 @@ export default function DashboardLapangan() {
                     </div>
                     <div className="shrink-0 ml-4">
                       {sls.belumSelesai > 0 ? (
-                        <span className="bg-orange-50 text-orange-700 border border-orange-200 text-xs font-extrabold px-3 py-1 rounded-full whitespace-nowrap">⚠️ {sls.belumSelesai} Belum Konfirmasi</span>
+                        <span className="bg-orange-50 text-orange-700 border border-orange-200 text-xs font-extrabold px-3 py-1 rounded-full whitespace-nowrap">⚠️ {sls.belumSelesai} Antrean</span>
                       ) : (
                         <span className="bg-emerald-50 text-emerald-700 border border-emerald-200 text-xs font-extrabold px-3 py-1 rounded-full whitespace-nowrap">✅ Selesai</span>
                       )}
@@ -387,13 +452,13 @@ export default function DashboardLapangan() {
           </div>
         )}
 
-        {/* LEVEL 2: DAFTAR DETAIL RUTA ANOMALI BERSARANG */}
+        {/* LEVEL 2: DAFTAR DETAIL RUTA ANOMALI BERSARANG DENGAN TIMELINE SNAPSHOT */}
         {selectedSls && (
           <div className="space-y-4">
             <div className="bg-amber-950 text-amber-50 p-4 rounded-xl shadow-xs border border-amber-900/40">
               <span className="text-amber-300/70 text-[10px] block uppercase font-bold tracking-wider">Fokus Kendali SLS:</span>
               <h3 className="font-black text-sm sm:text-base text-amber-200">{selectedSls.nmsls}</h3>
-              <p className="text-xs text-amber-100/70 font-medium mt-0.5">Desa {selectedSls.nmdesa} • Ditemukan {daftarAnomaliRuta.length} Kelompok Sampel Bermasalah</p>
+              <p className="text-xs text-amber-100/70 font-medium mt-0.5">Desa {selectedSls.nmdesa} • Ditemukan {daftarAnomaliRuta.length} Kelompok Subjek Kuesioner</p>
             </div>
 
             <h2 className="text-xs font-bold uppercase tracking-wider text-slate-400 px-1">Daftar Subjek Kuesioner Lapangan</h2>
@@ -409,11 +474,11 @@ export default function DashboardLapangan() {
                   <div key={ruta.assignment_id} className="bg-white rounded-xl border border-stone-200 shadow-xs overflow-hidden hover:shadow-md transition-shadow">
                     <div className="p-4 bg-stone-50 border-b border-stone-100 flex justify-between items-start gap-3">
                       <div className="space-y-1 max-w-[70%]">
-                        <span className="text-[9px] font-bold text-slate-400 block uppercase tracking-wide">Kepala Keluarga (KRT)</span>
+                        <span className="text-[9px] font-bold text-slate-400 block uppercase tracking-wide">Nama Subjek / Kepala RT</span>
                         <h4 className="font-extrabold text-slate-900 text-sm sm:text-base leading-tight">🧑 {teksHeaderUtama}</h4>
                         {ruta.nama_unit_usaha && (
                           <div className="pt-1">
-                            <span className="text-[9px] font-bold text-amber-700/80 block uppercase tracking-wide">Unit Usaha Terkait:</span>
+                            <span className="text-[9px] font-bold text-amber-700/80 block uppercase tracking-wide">Nama Institusi/Usaha:</span>
                             <p className="text-xs font-bold text-amber-900 bg-amber-50 px-2 py-0.5 rounded border border-amber-200/80 inline-block mt-0.5">🏢 {ruta.nama_unit_usaha}</p>
                           </div>
                         )}
@@ -428,34 +493,53 @@ export default function DashboardLapangan() {
                       {ruta.daftar_error.map((err, i) => {
                         const isBelumTuntas = err.status_konfirmasi === 'Belum Tindak Lanjut';
                         const isUsha = String(err.kode_anomali).startsWith('U');
-                        
-                        // 💡 KONVERSI DATA SECARA DINAMIS DARI REFERENSI DB MASTER
                         const teksKeterangan = getInfoAnomali(err.kode_anomali, 'deskripsi');
                         const warnaBarisBg = isBelumTuntas ? 'bg-red-50/70 border-amber-200/70' : 'bg-emerald-50/40 border-emerald-200/50';
 
                         return (
-                          <div key={err.anomali_id} className={`pt-3 pb-2 px-2.5 rounded-xl border transition-all ${warnaBarisBg} ${i === 0 ? 'mt-0' : 'mt-2'} space-y-2.5`}>
+                          <div key={err.kode_anomali} className={`pt-3 pb-2 px-2.5 rounded-xl border transition-all ${warnaBarisBg} ${i === 0 ? 'mt-0' : 'mt-2'} space-y-2.5`}>
                             <div className="flex justify-between items-start gap-3">
                               <div className="flex items-start gap-2.5">
                                 <span className={`font-black px-2 py-0.5 rounded-md text-[10px] shrink-0 mt-0.5 shadow-3xs ${isUsha ? 'bg-amber-600 text-white' : 'bg-stone-700 text-white'}`}>{err.kode_anomali}</span>
                                 <div className="space-y-0.5">
                                   <span className="font-bold text-slate-900 block leading-snug text-xs sm:text-sm">{teksKeterangan}</span>
                                   <span className="text-[11px] text-amber-900/80 bg-amber-50/60 font-medium block px-2 py-1 rounded-md border border-amber-100/70 mt-1 leading-normal">
-                                    Cek: {getInfoAnomali(err.kode_anomali, 'aturan_teknis')}
+                                    Pedoman Logika: {getInfoAnomali(err.kode_anomali, 'aturan_teknis')}
                                   </span>
+
+                                  {/* PITA LINIMASA SNAPSHOT (PETA HISTORI KEMUNCULAN DATA KEMBAR) */}
+                                  <div className="pt-2 flex flex-wrap items-center gap-1">
+                                    <span className="text-[9px] text-stone-400 font-bold uppercase tracking-wider block mr-1">Tanggal Anomali:</span>
+                                    {err.snapshots.map(snap => {
+                                      const snapBelumSelesai = snap.status_konfirmasi === 'Belum Tindak Lanjut';
+                                      return (
+                                        <span 
+                                          key={snap.anomali_id}
+                                          className={`text-[9px] font-mono font-bold px-1.5 py-0.2 rounded border shadow-2xs ${
+                                            snapBelumSelesai 
+                                              ? 'bg-amber-100 text-amber-800 border-amber-300' 
+                                              : 'bg-emerald-100 text-emerald-800 border-emerald-300 line-through'
+                                          }`}
+                                        >
+                                          📅 {formatTanggalIndo(snap.tanggal_snapshot)}
+                                        </span>
+                                      );
+                                    })}
+                                  </div>
+
                                 </div>
                               </div>
-                              <span className={`text-[9px] font-black px-2 py-0.5 rounded-md shrink-0 uppercase tracking-wide border shadow-3xs ${isBelumTuntas ? 'bg-amber-100 text-amber-800 border-amber-300/60' : 'bg-emerald-100 text-emerald-800 border-emerald-300/60'}`}>{isBelumTuntas ? 'Belum Diisi' : 'Selesai'}</span>
+                              <span className={`text-[9px] font-black px-2 py-0.5 rounded-md shrink-0 uppercase tracking-wide border shadow-3xs ${isBelumTuntas ? 'bg-amber-100 text-amber-800 border-amber-300/60' : 'bg-emerald-100 text-emerald-800 border-emerald-300/60'}`}>{isBelumTuntas ? 'Belum Tindak Lanjut' : 'Selesai'}</span>
                             </div>
 
                             {err.catatan_lapangan && (
                               <div className="p-2.5 bg-white/80 border border-stone-200 border-dashed rounded-lg text-xs text-slate-600 font-medium leading-relaxed">
-                                <span className="font-bold text-amber-900 text-[9px] block mb-0.5 uppercase tracking-wider">Konfirmasi Lapangan:</span>"{err.catatan_lapangan}"
+                                <span className="font-bold text-amber-900 text-[9px] block mb-0.5 uppercase tracking-wider">Konfirmasi Terkini Petugas:</span>"{err.catatan_lapangan}"
                               </div>
                             )}
 
                             <div className="flex justify-end pt-0.5">
-                              <button onClick={() => handleOpenActionModal(err, isUsha ? `${ruta.nama_unit_usaha || teksHeaderUtama} (Usaha)` : teksHeaderUtama)} className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all shadow-xs ${isBelumTuntas ? 'bg-amber-600 hover:bg-amber-700 text-white' : 'bg-stone-100 text-stone-600 hover:bg-stone-200 border border-stone-200'}`}>{isBelumTuntas ? '✍️ Isi Konfirmasi' : '✏️ Perbaiki Konfirmasi'}</button>
+                              <button onClick={() => handleOpenActionModal(err, isUsha ? `${ruta.nama_unit_usaha || teksHeaderUtama} (Usaha)` : teksHeaderUtama, ruta.assignment_id)} className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all shadow-xs ${isBelumTuntas ? 'bg-amber-600 hover:bg-amber-700 text-white' : 'bg-stone-100 text-stone-600 hover:bg-stone-200 border border-stone-200'}`}>{isBelumTuntas ? '✍️ Isi Konfirmasi' : '✏️ Perbaiki Konfirmasi'}</button>
                             </div>
                           </div>
                         );
@@ -469,13 +553,13 @@ export default function DashboardLapangan() {
         )}
       </div>
 
-      {/* INPUT CONFIRMATION MODAL */}
+      {/* INPUT CONFIRMATION MODAL DENGAN PEMBERITAHUAN EFEK DOMINO LINIMASA */}
       {editingAnomali && (
         <div className="fixed inset-0 bg-slate-900/60 z-30 flex items-center justify-center p-4 animate-fade-in backdrop-blur-xs">
           <div className="bg-white w-full max-w-md rounded-2xl p-5 shadow-xl space-y-4 border border-stone-200 animate-scale-up">
             <div className="flex justify-between items-center border-b border-stone-100 pb-3">
               <div className="space-y-0.5">
-                <span className="text-[9px] font-black text-amber-700 uppercase tracking-widest">Lembar Konfirmasi</span>
+                <span className="text-[9px] font-black text-amber-700 uppercase tracking-widest">Lembar Justifikasi Data</span>
                 <h4 className="text-sm font-bold text-slate-900 leading-tight">{editingAnomali.nama_subjek}</h4>
                 <div className="text-[11px] text-slate-500 font-medium bg-stone-100 px-2.5 py-1 rounded-md inline-block mt-1">
                   Anomali {editingAnomali.kode_anomali}: <span className="font-bold text-slate-700">{getInfoAnomali(editingAnomali.kode_anomali, 'deskripsi')}</span>
@@ -485,6 +569,11 @@ export default function DashboardLapangan() {
             </div>
 
             <div className="space-y-3.5">
+              {/* NOTIFIKASI PENGINGAT PETUGAS MENGENAI EFEK DOMINO */}
+              <div className="bg-amber-50 border border-amber-200 p-2.5 rounded-xl text-[11px] leading-relaxed text-amber-950 font-medium">
+                💡 <strong>Informasi Sinkronisasi Linimasa:</strong> Kelompok anomali ini terdeteksi sebanyak <span className="font-black underline">{editingAnomali.snapshots?.length || 1} kali</span> di server pusat. Mengisi konfirmasi di bawah akan otomatis melunasi antrean untuk semua tanggal snapshot terkait.
+              </div>
+
               <div>
                 <label className="block text-xs font-bold text-slate-500 mb-1 uppercase tracking-wider">Status Verifikasi Lapangan</label>
                 <select value={statusKonfirmasiForm} onChange={(e) => setStatusKonfirmasiForm(e.target.value)} className="w-full bg-stone-50 border border-stone-200 rounded-lg p-2.5 text-xs font-bold text-slate-800 focus:border-amber-500 focus:ring-1 focus:ring-amber-500 outline-hidden transition-all">
@@ -493,8 +582,8 @@ export default function DashboardLapangan() {
                 </select>
               </div>
               <div>
-                <label className="block text-xs font-bold text-slate-500 mb-1 uppercase tracking-wider">Alasan / Hasil Konfirmasi <span className="text-orange-500">*</span></label>
-                <textarea rows="4" value={catatanLapanganForm} onChange={(e) => setCatatanLapanganForm(e.target.value)} placeholder="Tulis alasan logis yang bisa menjelaskan anomali..." className="w-full bg-stone-50 border border-stone-200 rounded-lg p-2.5 text-xs font-medium text-slate-800 focus:border-amber-500 focus:ring-1 focus:ring-amber-500 outline-hidden h-24 transition-all resize-none leading-relaxed"></textarea>
+                <label className="block text-xs font-bold text-slate-500 mb-1 uppercase tracking-wider">Alasan / Hasil Konfirmasi Lapangan <span className="text-orange-500">*</span></label>
+                <textarea rows="4" value={catatanLapanganForm} onChange={(e) => setCatatanLapanganForm(e.target.value)} placeholder="Tulis alasan logis hasil kroscek lapangan yang bisa menerangkan penyebab anomali rules validasi..." className="w-full bg-stone-50 border border-stone-200 rounded-lg p-2.5 text-xs font-medium text-slate-800 focus:border-amber-500 focus:ring-1 focus:ring-amber-500 outline-hidden h-24 transition-all resize-none leading-relaxed"></textarea>
               </div>
             </div>
 
@@ -506,7 +595,7 @@ export default function DashboardLapangan() {
         </div>
       )}
 
-      {/* KAMUS POPUP PANDUAN (DINAMIS LOOPING DARI STATE DATABASE) */}
+      {/* KAMUS POPUP PANDUAN PETA LOGIKA ANOMALI */}
       {showPanduanModal && (
         <div className="fixed inset-0 bg-slate-900/70 z-40 flex items-center justify-center p-4 animate-fade-in backdrop-blur-xs">
           <div className="bg-white w-full max-w-3xl rounded-2xl shadow-2xl border border-stone-200 flex flex-col max-h-[85vh] animate-scale-up">
@@ -523,7 +612,6 @@ export default function DashboardLapangan() {
                 <strong>Perhatian Petugas:</strong> Definisikan hasil verifikasi Anda di lapangan berdasarkan aturan rules logika blok kuesioner sebelum melakukan pengisian konfirmasi.
               </p>
               
-              {/* SEKTOR 1: ANOMALI USAHA (Dinamis dari Database) */}
               <div className="space-y-3">
                 <h4 className="text-sm font-extrabold text-amber-800 uppercase tracking-wider flex items-center gap-1.5 border-b border-stone-100 pb-1.5">🏢 Anomali Usaha</h4>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -536,7 +624,6 @@ export default function DashboardLapangan() {
                 </div>
               </div>
 
-              {/* SEKTOR 2: ANOMALI KELUARGA (Dinamis dari Database) */}
               <div className="space-y-3 pt-2">
                 <h4 className="text-sm font-extrabold text-stone-800 uppercase tracking-wider flex items-center gap-1.5 border-b border-stone-100 pb-1.5">🧑 Anomali Keluarga</h4>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
