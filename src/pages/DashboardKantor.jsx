@@ -791,11 +791,11 @@ export default function DashboardKantor() {
                         <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-stone-200/90 font-medium">
 
                           <div className="flex items-center gap-3 flex-wrap opacity-95">
-                            <p className="flex items-center gap-1">📍 Desa: <span className="text-white font-extrabold">{subjek.nmdesa}</span></p>
+                            <p className="flex items-center gap-1">Desa: <span className="text-white font-extrabold">{subjek.nmdesa}</span></p>
                             <p className="text-stone-400/80 hidden sm:inline">•</p>
-                            <p className="flex items-center gap-1">🗺️ SLS: <span className="text-white font-extrabold">{subjek.nmsls}</span></p>
+                            <p className="flex items-center gap-1">SLS: <span className="text-white font-extrabold">{subjek.nmsls}</span></p>
                             <p className="text-stone-400/80 hidden sm:inline">•</p>
-                            <p className="flex items-center gap-1">💼 PCL: <span className="text-white font-extrabold">{subjek.nama_pcl}</span></p>
+                            <p className="flex items-center gap-1">PCL: <span className="text-white font-extrabold">{subjek.nama_pcl}</span></p>
                           </div>
                         </div>
                       </div>
