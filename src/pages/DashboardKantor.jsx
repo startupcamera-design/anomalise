@@ -40,7 +40,20 @@ export default function DashboardKantor() {
   const [pilihanTanggalSnapshot, setPilihanTanggalSnapshot] = useState(new Date().toISOString().split('T')[0]);
   const [uploadProgressStatus, setUploadProgressStatus] = useState(''); // 'membaca', 'mengirim', 'selesai'
   const [hasilUploadRingkasan, setHasilUploadRingkasan] = useState(null);
+// State untuk menyimpan daftar nama kolom asli dari file Excel
+const [excelHeaders, setExcelHeaders] = useState([]);
 
+// State untuk menyimpan peta (mapping) pilihan user
+// Kunci (Key) adalah kolom sistem, Nilai (Value) adalah kolom Excel pilihan user
+const [columnMap, setColumnMap] = useState({
+  assignment_id: '',
+  nama_subjek: '',
+  nama_anomali: '',
+  kodedesa: '',
+  kodesls: '',
+  subsls: '',
+  link_fasih: ''
+});
   // State untuk Tab Filter di Dalam Modal
   const [subjekFilterTab, setSubjekFilterTab] = useState('siap_eksekusi');
 
@@ -168,123 +181,155 @@ export default function DashboardKantor() {
   };
 
   // Fase 1: Membaca File Excel & Membuka Modal Review Ringkasan Awal
-  const handlePilihFileExcel = (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
+const handlePilihFileExcel = (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
 
-    setUploading(true);
-    setUploadProgressStatus('membaca');
+  setUploading(true);
+  setUploadProgressStatus('membaca');
 
-    const reader = new FileReader();
-    reader.onload = (evt) => {
-      try {
-        const bstr = evt.target.result;
-        const wb = XLSX.read(bstr, { type: 'binary' });
-        const ws = wb.Sheets[wb.SheetNames[0]];
-        const rawData = XLSX.utils.sheet_to_json(ws);
-
-        if (rawData.length === 0) {
-          alert('File Excel kosong!');
-          setUploading(false);
-          return;
-        }
-
-        setRawExcelData(rawData);
-        setHasilUploadRingkasan(null); // Reset hasil ringkasan sebelumnya
-        setModalUploadReview(true);    // Buka dialog review konfirmasi
-      } catch (err) {
-        alert('Gagal membaca file Excel: ' + err.message);
-        setUploading(false);
-      }
-    };
-    reader.readAsBinaryString(file);
-    // Reset file input value agar bisa memilih file yang sama lagi nantinya
-    e.target.value = '';
-  };
-
-  // Fase 2: Eksekusi Penyimpanan Data ke Supabase dengan Progres & Ringkasan Akhir
-  const handleEksekusiUploadKeDatabase = async () => {
-    if (!rawExcelData) return;
-    setUploadProgressStatus('mengirim');
-
+  const reader = new FileReader();
+  reader.onload = (evt) => {
     try {
-      const { data: dataMenggantung } = await supabaseData
-        .from('view_monitoring_anomali')
-        .select('assignment_id, kode_anomali, pertama_muncul_pada')
-        .not('status_fasih', 'eq', 'Sudah Tindak Lanjut FASIH');
+      const bstr = evt.target.result;
+      const wb = XLSX.read(bstr, { type: 'binary' });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const rawData = XLSX.utils.sheet_to_json(ws);
 
-      let jumlahSukses = 0;
-      let jumlahGagal = 0;
-
-      const formattedData = rawExcelData.map((row, index) => {
-        try {
-          const normalizedRow = {};
-          Object.keys(row).forEach((key) => {
-            normalizedRow[key.toString().toLowerCase().replace(/[\s_/]/g, '')] = row[key];
-          });
-
-          const namaAnomaliRaw = normalizedRow['namaanomali'] || '';
-          const aturanCocok = masterAnomali.find(aturan =>
-            namaAnomaliRaw.toLowerCase().includes(aturan.kata_kunci.toLowerCase())
-          );
-
-          const kodeAnomali = aturanCocok ? aturanCocok.kode : 'ERR';
-          const kategori = aturanCocok ? aturanCocok.kategori : 'USAHA';
-          const namaSubjek = normalizedRow['namausaha'] || normalizedRow['namakrt'] || normalizedRow['namasubjek'] || 'Tanpa Nama';
-          const desa = String(normalizedRow['kodedesa'] || normalizedRow['kddesa'] || '').trim().padStart(10, '0');
-          const sls = String(normalizedRow['kodesls'] || String(normalizedRow['kdsls'] || '')).trim().padStart(4, '0');
-          const subSls = String(normalizedRow['subsls'] || normalizedRow['kdsubsls'] || '00').trim().padStart(2, '0');
-          const generatedIdSubSls = `${desa}${sls}${subSls}`;
-          const assignmentId = String(normalizedRow['assignmentid'] || normalizedRow['assignment_id'] || `GEN-${Date.now()}-${index}`);
-
-          const temukanDataLama = dataMenggantung?.find(
-            old => old.assignment_id === assignmentId && old.kode_anomali === kodeAnomali
-          );
-
-          jumlahSukses++; // Asumsi awal baris data terformat dengan baik
-          return {
-            idsubsls: generatedIdSubSls,
-            assignment_id: assignmentId,
-            nama_subjek: namaSubjek,
-            kode_anomali: kodeAnomali,
-            kategori_anomali: kategori,
-            link_fasih: normalizedRow['linkfasih'] || normalizedRow['link_fasih'] || '',
-            tanggal_snapshot: pilihanTanggalSnapshot,
-            pertama_muncul_pada: temukanDataLama ? temukanDataLama.pertama_muncul_pada : pilihanTanggalSnapshot
-          };
-        } catch (errRow) {
-          jumlahGagal++;
-          return null;
-        }
-      }).filter(item => item !== null);
-
-      if (formattedData.length > 0) {
-        const { error } = await supabaseData
-          .from('anomali_data')
-          .upsert(formattedData, {
-            onConflict: 'assignment_id, kode_anomali, tanggal_snapshot',
-            ignoreDuplicates: true
-          });
-
-        if (error) throw error;
+      if (rawData.length === 0) {
+        alert('File Excel kosong!');
+        setUploading(false);
+        return;
       }
 
-      // Tampilkan hasil final akhir di modal
-      setHasilUploadRingkasan({
-        total: rawExcelData.length,
-        sukses: jumlahSukses,
-        gagal: jumlahGagal
-      });
-      setUploadProgressStatus('selesai');
-      fetchDataMonitoringKantor();
+      // 🌟 AMBIL SEMUA HEADER ASLI DARI EXCEL
+      // Kita ambil object keys dari baris pertama data
+      const headersAsli = Object.keys(rawData[0]);
+      setExcelHeaders(headersAsli);
 
+      // Otomatisasi Tebakan Awal (Auto-guess mapping agar user tidak lelah memilih dari nol)
+      const tebakKolom = (kemungkinan) => {
+        const hasil = headersAsli.find(h => 
+          kemungkinan.includes(h.toLowerCase().replace(/[\s_\-\/]/g, ''))
+        );
+        return hasil || '';
+      };
+
+      setColumnMap({
+        assignment_id: tebakKolom(['assignmentid', 'assignment_id', 'id', 'idassignment']),
+        nama_subjek: tebakKolom(['namausaha', 'namakrt', 'namasubjek', 'namakepalakeluarga', 'nama']),
+        nama_anomali: tebakKolom(['namaanomali', 'deskripsianomali', 'anomali', 'keterangan', 'pesan']),
+        kodedesa: tebakKolom(['kodedesa', 'kddesa', 'iddesa', 'desa']),
+        sls: tebakKolom(['kodesls', 'kdsls', 'idsls', 'sls']),
+        subsls: tebakKolom(['subsls', 'kdsubsls', 'sub_sls']),
+        link_fasih: tebakKolom(['linkfasih', 'link_fasih', 'urlfasih', 'tautan'])
+      });
+
+      setRawExcelData(rawData);
+      setHasilUploadRingkasan(null);
+      setModalUploadReview(true); // Buka modal yang sekarang berisi UI Pemetaan Column
     } catch (err) {
-      console.error(err);
-      alert('Gagal mengimpor data anomali: ' + err.message);
-      setModalUploadReview(false);
+      alert('Gagal membaca file Excel: ' + err.message);
       setUploading(false);
     }
   };
+  reader.readAsBinaryString(file);
+  e.target.value = '';
+};
+
+  // Fase 2: Eksekusi Penyimpanan Data ke Supabase dengan Progres & Ringkasan Akhir
+const handleEksekusiUploadKeDatabase = async () => {
+  if (!rawExcelData) return;
+
+  // Validasi input: pastikan kolom-kolom kritikal sudah dipetakan oleh user
+  if (!columnMap.assignment_id || !columnMap.nama_subjek || !columnMap.nama_anomali) {
+    alert('Mohon petakan kolom minimal untuk ID Assignment, Nama Subjek, dan Nama Anomali!');
+    return;
+  }
+
+  setUploadProgressStatus('mengirim');
+
+  try {
+    const { data: dataMenggantung } = await supabaseData
+      .from('view_monitoring_anomali')
+      .select('assignment_id, kode_anomali, pertama_muncul_pada')
+      .not('status_fasih', 'eq', 'Sudah Tindak Lanjut FASIH');
+
+    let jumlahSukses = 0;
+    let jumlahGagal = 0;
+
+    const formattedData = rawExcelData.map((row) => {
+      try {
+        // Ambil data secara dinamis berdasarkan kolom yang dipilih user di UI
+        const namaAnomaliRaw = row[columnMap.nama_anomali] || '';
+        
+        const aturanCocok = masterAnomali.find(aturan =>
+          String(namaAnomaliRaw).toLowerCase().includes(aturan.kata_kunci.toLowerCase())
+        );
+
+        const kodeAnomali = aturanCocok ? aturanCocok.kode : 'ERR';
+        const kategori = aturanCocok ? aturanCocok.kategori : 'USAHA';
+        
+        const namaSubjek = row[columnMap.nama_subjek] || 'Tanpa Nama';
+        const assignmentId = String(row[columnMap.assignment_id] || `GEN-${Date.now()}`);
+        
+        // Baca geografi wilayah
+        const desaRaw = columnMap.kodedesa ? String(row[columnMap.kodedesa] || '') : '';
+        const slsRaw = columnMap.sls ? String(row[columnMap.sls] || '') : '';
+        const subSlsRaw = columnMap.subsls ? String(row[columnMap.subsls] || '') : '00';
+
+        const desa = desaRaw.trim().padStart(10, '0');
+        const sls = slsRaw.trim().padStart(4, '0');
+        const subSls = subSlsRaw.trim().padStart(2, '0');
+        const generatedIdSubSls = `${desa}${sls}${subSls}`;
+
+        const temukanDataLama = dataMenggantung?.find(
+          old => old.assignment_id === assignmentId && old.kode_anomali === kodeAnomali
+        );
+
+        jumlahSukses++;
+        return {
+          idsubsls: generatedIdSubSls,
+          assignment_id: assignmentId,
+          nama_subjek: namaSubjek,
+          kode_anomali: kodeAnomali,
+          kategori_anomali: kategori,
+          link_fasih: columnMap.link_fasih ? (row[columnMap.link_fasih] || '') : '',
+          tanggal_snapshot: pilihanTanggalSnapshot,
+          pertama_muncul_pada: temukanDataLama ? temukanDataLama.pertama_muncul_pada : pilihanTanggalSnapshot
+        };
+      } catch (errRow) {
+        jumlahGagal++;
+        return null;
+      }
+    }).filter(item => item !== null);
+
+    if (formattedData.length > 0) {
+      const { error } = await supabaseData
+        .from('anomali_data')
+        .upsert(formattedData, {
+          onConflict: 'assignment_id, kode_anomali, tanggal_snapshot',
+          ignoreDuplicates: true
+        });
+
+      if (error) throw error;
+    }
+
+    setHasilUploadRingkasan({
+      total: rawExcelData.length,
+      sukses: jumlahSukses,
+      gagal: jumlahGagal
+    });
+    setUploadProgressStatus('selesai');
+    fetchDataMonitoringKantor();
+
+  } catch (err) {
+    console.error(err);
+    alert('Gagal mengimpor data anomali: ' + err.message);
+    setModalUploadReview(false);
+    setUploading(false);
+  }
+};
 
   const handleBukaModalDetail = async (itemObj, namaKec) => {
     setSubjekFilterTab('siap_eksekusi');
@@ -643,26 +688,57 @@ export default function DashboardKantor() {
               <h3 className="text-sm font-black uppercase tracking-wider text-slate-800">Manajer Snapshot Excel</h3>
             </div>
 
-            {/* KONDISI 1: FORMULIR ATUR TANGGAL & RINGKASAN SEBELUM PROSES */}
+{/* KONDISI 1: FORMULIR ATUR TANGGAL & LAYAR PEMETAAN KOLOM DINAMIS */}
             {uploadProgressStatus === 'membaca' && (
-              <div className="space-y-4">
-                <div className="bg-stone-50 border p-3.5 rounded-xl space-y-1.5 shadow-inner">
-                  <span className="text-[10px] text-stone-400 block uppercase font-bold tracking-wider">Hasil Pemindaian File:</span>
-                  <p className="text-xs text-slate-700 font-medium">Total Baris Anomali Terdeteksi: <strong className="text-amber-800 font-mono text-sm font-black">{rawExcelData?.length || 0}</strong> Baris Rekord.</p>
+              <div className="space-y-4 max-h-[70vh] overflow-y-auto pr-1">
+                <div className="bg-stone-50 border p-3.5 rounded-xl space-y-1 shadow-inner">
+                  <span className="text-[10px] text-stone-400 block uppercase font-bold tracking-wider">File Terbaca:</span>
+                  <p className="text-xs text-slate-700 font-medium">Total: <strong className="text-amber-800 font-mono text-sm font-black">{rawExcelData?.length || 0}</strong> baris data.</p>
                 </div>
 
+                {/* Pengaturan Tanggal Snapshot */}
                 <div className="space-y-1">
-                  <label className="text-[10px] font-bold text-slate-500 block uppercase tracking-wide">Tentukan Tanggal Snapshot Data:</label>
+                  <label className="text-[10px] font-bold text-slate-600 block uppercase tracking-wide">📅 Tanggal Snapshot Data:</label>
                   <input 
                     type="date" 
                     value={pilihanTanggalSnapshot} 
                     onChange={(e) => setPilihanTanggalSnapshot(e.target.value)}
                     className="w-full bg-white border border-stone-300 rounded-lg p-2 text-xs font-mono font-bold text-slate-800 focus:outline-amber-600"
                   />
-                  <p className="text-[10px] text-stone-400/80 italic font-medium mt-1">Sistem akan mengelompokkan data ini sesuai folder tanggal yang Anda tentukan di atas.</p>
                 </div>
 
-                <div className="flex justify-end gap-2 pt-3 border-t text-xs font-bold">
+                <div className="border-t pt-2">
+                  <span className="text-[10px] font-black text-amber-800 block uppercase tracking-wider mb-2">🔄 Pemetaan Kolom Berkas (Column Mapper):</span>
+                  <p className="text-[11px] text-stone-500 mb-3">Sesuaikan kolom sistem (kiri) dengan nama kolom yang ada di dalam Excel Anda (kanan).</p>
+                  
+                  <div className="space-y-3">
+                    {[
+                      { label: '🆔 ID Assignment / Dokumen *', field: 'assignment_id' },
+                      { label: '🧑 Nama Pengusaha / Kepala RT *', field: 'nama_subjek' },
+                      { label: '⚠️ Nama / Deskripsi Anomali *', field: 'nama_anomali' },
+                      { label: '📍 Kode Desa (10 Digit)', field: 'kodedesa' },
+                      { label: '🗺️ Kode SLS (4 Digit)', field: 'sls' },
+                      { label: '🌿 Kode Sub-SLS (2 Digit)', field: 'subsls' },
+                      { label: '🔗 Tautan Dokumen FASIH', field: 'link_fasih' },
+                    ].map((item) => (
+                      <div key={item.field} className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 bg-stone-50 p-2 rounded-lg border border-stone-200">
+                        <label className="text-xs font-semibold text-slate-700 w-full sm:w-[45%]">{item.label}</label>
+                        <select
+                          value={columnMap[item.field]}
+                          onChange={(e) => setColumnMap(prev => ({ ...prev, [item.field]: e.target.value }))}
+                          className="w-full sm:w-[53%] bg-white border rounded p-1.5 text-xs text-slate-800 font-medium focus:ring-1 focus:ring-amber-600 outline-none"
+                        >
+                          <option value="">-- Lewati / Tidak Ada --</option>
+                          {excelHeaders.map(headerName => (
+                            <option key={headerName} value={headerName}>{headerName}</option>
+                          ))}
+                        </select>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="flex justify-end gap-2 pt-3 border-t text-xs font-bold sticky bottom-0 bg-white py-2">
                   <button 
                     type="button" 
                     onClick={() => { setModalUploadReview(false); setUploading(false); }} 
