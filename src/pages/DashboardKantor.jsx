@@ -395,7 +395,7 @@ const handleEksekusiUploadKeDatabase = async () => {
     setIdSelesaiLokal([]);
   };
 
-  const handleSimpanFasihTunggal = async (anomaliId) => {
+const handleSimpanFasihTunggal = async (anomaliId) => {
     setUpdatingId(anomaliId);
     setKonfirmasiId(null);
     try {
@@ -430,10 +430,34 @@ const handleEksekusiUploadKeDatabase = async () => {
 
       if (errUpsert) throw errUpsert;
 
-      alert('Berhasil memverifikasi data! Semua anomali serupa di tanggal snapshot lain otomatis diselesaikan.');
-      
+      // 💡 UPDATE STATE LOKAL AGAR DATA MODAL BERUBAH SECARA HALUS TANPA MENUTUP JENDELA
+      // 1. Catat anomali_id yang baru diselesaikan ke state penanda lokal
+      setIdSelesaiLokal(prev => [...prev, anomaliId]);
+
+      // 2. Ubah status_fasih item anomali di dalam modal secara realtime
+      setModalDetailObj(prev => {
+        if (!prev) return null;
+        return {
+          ...prev,
+          daftarSubjek: prev.daftarSubjek.map(subjek => {
+            if (subjek.assignment_id === assignIdIdem) {
+              return {
+                ...subjek,
+                detailAnomali: subjek.detailAnomali.map(anomali => {
+                  if (anomali.kode === kodeAnomaliIdem) {
+                    return { ...anomali, status_fasih: 'Sudah Tindak Lanjut FASIH' };
+                  }
+                  return anomali;
+                })
+              };
+            }
+            return subjek;
+          })
+        };
+      });
+
+      // 3. Refresh data rekap tabel utama di latar belakang
       await fetchDataMonitoringKantor();
-      handleTutupModal();
       
     } catch (err) {
       alert('Gagal memperbarui status: ' + err.message);
