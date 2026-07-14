@@ -612,7 +612,7 @@ export default function DashboardLapangan() {
 
             <div className="flex gap-2.5 pt-2 border-t border-stone-100">
               <button type="button" onClick={() => setEditingAnomali(null)} className="w-1/3 border border-stone-200 rounded-xl py-2 text-xs font-bold text-slate-500 hover:bg-stone-50 transition-colors">Batal</button>
-              <button type="button" disabled={submitting} onClick={handleSaveTindakLaught || handleSaveTindakLanjut} className="w-2/3 bg-amber-600 hover:bg-amber-700 text-white rounded-xl py-2 text-xs font-bold disabled:opacity-50 shadow-xs transition-colors">{submitting ? 'Menyimpan...' : 'Simpan Konfirmasi'}</button>
+              <button type="button" disabled={submitting} onClick={handleSaveTindakLanjut || handleSaveTindakLanjut} className="w-2/3 bg-amber-600 hover:bg-amber-700 text-white rounded-xl py-2 text-xs font-bold disabled:opacity-50 shadow-xs transition-colors">{submitting ? 'Menyimpan...' : 'Simpan Konfirmasi'}</button>
             </div>
           </div>
         </div>
