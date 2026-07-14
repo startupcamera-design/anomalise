@@ -49,7 +49,6 @@ export default function DashboardLapangan() {
   };
 
   // --- 1. AMBIL DAFTAR PCL AGREGAT (UNTUK PML) ---
-// --- 1. AMBIL DAFTAR PCL AGREGAT (VERSI HEMAT EGRESS 95%) ---
   const loadDaftarPclAgregat = async (pmlEmail) => {
     setLoading(true);
     try {
@@ -72,39 +71,32 @@ export default function DashboardLapangan() {
         .select('idsubsls, petugas_id')
         .in('petugas_id', listPclEmails);
 
-      // 🌟 OPTIMALISASI: Menembak View Agregat Kantor yang sudah diringkas oleh PostgreSQL (Menghemat Egress drastis)
-      const { data: anomaliAgregat } = await supabaseData
-        .from('view_rekap_agregat_kantor')
-        .select('kdkec, tanggal_snapshot, pml_email, kode_anomali, total_rows, belum_fasih')
+      const { data: anomaliData } = await supabaseData
+        .from('view_monitoring_anomali')
+        .select('idsubsls, status_konfirmasi, pml_email, assignment_id, kode_anomali, tanggal_snapshot')
         .eq('pml_email', pmlEmail);
 
       const mappedPcl = pclData.map(pcl => {
         const slsOwns = slsData ? slsData.filter(s => s.petugas_id === pcl.email).map(s => s.idsubsls) : [];
+        const anomaliOwns = anomaliData ? anomaliData.filter(a => slsOwns.includes(a.idsubsls)) : [];
         
-        // 🌟 KONTROL LOKAL: Karena datanya sudah diringkas per kelompok kode oleh server,
-        // kita cukup menjumlahkan kolom 'total_rows' dan 'belum_fasih' yang sudah dihitung database.
-        let totalMasalahUnik = 0;
+        // UNIKKAN PENGHITUNGAN BEBAN: Hitung per kelompok masalah unik (assignment_id + kode) bukan total record snapshot
+        const kunciUnikSet = new Set(anomaliOwns.map(a => `${a.assignment_id}_${a.kode_anomali}`));
+        const totalMasalahUnik = kunciUnikSet.size;
+
+        // Hitung yang belum tuntas dikonfirmasi pada kelompok masalah unik tersebut
         let belumSelesaiUnik = 0;
-
-        if (anomaliAgregat) {
-          // Cari data agregat yang memiliki kdkec atau kriteria yang beririsan dengan SLS milik PCL ini
-          // Catatan: Jika view monitoring anomali Anda memiliki kolom 'idsubsls', disarankan menambahkannya ke view agregat.
-          // Namun jika menggunakan relasi pml_email, ini sudah memangkas baris dari ribuan menjadi puluhan baris saja.
-          anomaliAgregat.forEach(ag => {
-            totalMasalahUnik += Number(ag.total_rows || 0);
-            belumSelesaiUnik += Number(ag.belum_fasih || 0);
-          });
-        }
-
-        // Failsafe pembagian beban rata-rata per PCL dari total agregat
-        const proporsiBeban = Math.ceil(totalMasalahUnik / Math.max(1, listPclEmails.length));
-        const proporsiBelum = Math.ceil(belumSelesaiUnik / Math.max(1, listPclEmails.length));
+        kunciUnikSet.forEach(kunci => {
+          const barisTerkait = anomaliOwns.filter(a => `${a.assignment_id}_${a.kode_anomali}` === kunci);
+          const adaYangBelum = barisTerkait.some(b => b.status_konfirmasi === 'Belum Tindak Lanjut');
+          if (adaYangBelum) belumSelesaiUnik++;
+        });
 
         return {
           ...pcl,
-          totalBeban: proporsiBeban,
-          belumSelesai: proporsiBelum,
-          sudahSelesai: Math.max(0, proporsiBeban - proporsiBelum),
+          totalBeban: totalMasalahUnik,
+          belumSelesai: belumSelesaiUnik,
+          sudahSelesai: Math.max(0, totalMasalahUnik - belumSelesaiUnik),
           jumlahSls: slsOwns.length
         };
       });
@@ -190,7 +182,7 @@ export default function DashboardLapangan() {
             nama_keluarga_krt: '', 
             nama_unit_usaha: '',   
             fallback_nama: item.nama_subjek, 
-            daftar_error_grup: {} // Gunakan objek map internal untuk melebur kode yang sama lintas tanggal
+            daftar_error_grup: {} 
           };
         }
 
@@ -202,38 +194,31 @@ export default function DashboardLapangan() {
 
         const compositeErrorKey = item.kode_anomali;
 
-        // Jika kode anomali untuk subjek ini belum terdaftar di grup internal, buat template wadahnya
         if (!grupRuta[item.assignment_id].daftar_error_grup[compositeErrorKey]) {
           grupRuta[item.assignment_id].daftar_error_grup[compositeErrorKey] = {
             kode_anomali: item.kode_anomali,
             kategori: item.kategori_anomali,
-            // Status konfirmasi default mengacu ke yang terupdate
             status_konfirmasi: item.status_konfirmasi || 'Belum Tindak Lanjut',
             catatan_lapangan: item.catatan_lapangan || '',
-            // KUMPULAN LINIMASA: Simpan array semua anomali_id dan tanggal snapshot kemunculannya
             snapshots: [] 
           };
         }
 
-        // Masukkan data snapshot spesifik baris ini ke dalam list linimasa wadah induknya
         grupRuta[item.assignment_id].daftar_error_grup[compositeErrorKey].snapshots.push({
           anomali_id: item.anomali_id,
           tanggal_snapshot: item.tanggal_snapshot,
           status_konfirmasi: item.status_konfirmasi || 'Belum Tindak Lanjut'
         });
 
-        // Failsafe status: Jika salah satu snapshot ada yang masih 'Belum Tindak Lanjut', pastikan status luar grup menjadi 'Belum Tindak Lanjut'
         if (item.status_konfirmasi === 'Belum Tindak Lanjut') {
           grupRuta[item.assignment_id].daftar_error_grup[compositeErrorKey].status_konfirmasi = 'Belum Tindak Lanjut';
         }
       });
 
-      // Konversikan Map objek internal `daftar_error_grup` kembali menjadi Array tersarang yang siap dirender
       const finalRutaFlattened = Object.values(grupRuta).map(ruta => ({
         ...ruta,
         daftar_error: Object.values(ruta.daftar_error_grup).map(errGrup => ({
           ...errGrup,
-          // Urutkan rentang tanggal snapshot dari yang paling awal ke yang terbaru
           snapshots: errGrup.snapshots.sort((a, b) => String(a.tanggal_snapshot).localeCompare(String(b.tanggal_snapshot)))
         }))
       }));
@@ -264,7 +249,6 @@ export default function DashboardLapangan() {
   }, [profilUser?.email, profilUser?.role]);
 
   const handleOpenActionModal = (subAnomali, namaSubjek, assignmentId) => {
-    // Masukkan info assignment_id ke objek editing untuk pelacakan massal
     setEditingAnomali({ ...subAnomali, nama_subjek: namaSubjek, assignment_id: assignmentId });
     setStatusKonfirmasiForm(subAnomali.status_konfirmasi === 'Belum Tindak Lanjut' ? 'Sesuai Kondisi Lapangan' : subAnomali.status_konfirmasi);
     setCatatanLapanganForm(subAnomali.catatan_lapangan);
@@ -275,7 +259,6 @@ export default function DashboardLapangan() {
     if (!catatanLapanganForm.trim()) return alert('Catatan lapangan/konfirmasi wajib diisi!');
     setSubmitting(true);
     try {
-      // 1. Susun daftar payload massal untuk seluruh ID snapshot kembar yang ada di linimasa anomali ini
       const payloadMassal = editingAnomali.snapshots.map(snap => ({
         anomali_id: snap.anomali_id,
         status_konfirmasi: statusKonfirmasiForm,
@@ -284,17 +267,14 @@ export default function DashboardLapangan() {
         tanggal_konfirmasi: new Date().toISOString()
       }));
 
-      // 2. Eksekusi UPSERT massal sekaligus ke Supabase
       const { error } = await supabaseData
         .from('tindak_lanjut_anomali')
         .upsert(payloadMassal, { onConflict: 'anomali_id' });
 
       if (error) throw error;
 
-      // Evaluasi apakah status awal dari kelompok ini memang benar-benar belum pernah disentuh
       const statusAwalKelompokBelumTuntas = editingAnomali.status_konfirmasi === 'Belum Tindak Lanjut';
 
-      // 3. REALTIME UPDATE STATE PETUGAS LAPANGAN LINTAS LINIMASA SNAPSHOT (0 KB EGRESS)
       setDaftarAnomaliRuta(prevRuta => 
         prevRuta.map(ruta => {
           if (ruta.assignment_id !== editingAnomali.assignment_id) return ruta;
@@ -436,7 +416,7 @@ export default function DashboardLapangan() {
             <h2 className="text-xs font-bold uppercase tracking-wider text-slate-400 px-1">Daftar Wilayah SLS Tugas Pendataan</h2>
             
             {daftarSls.length === 0 ? (
-              <div className="bg-white rounded-xl p-12 text-center border border-stone-200 text-slate-400 font-medium shadow-3xs">Tidak ada beban muatan anomali terpetakan di wilayah kerja SLS ini.</div>
+              <div className="bg-white rounded-xl p-12 text-center border border-stone-200 text-slate-400 font-medium shadow-3xs">Tidak ada beban muaman anomali terpetakan di wilayah kerja SLS ini.</div>
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                 {daftarSls.map(sls => (
@@ -503,40 +483,41 @@ export default function DashboardLapangan() {
                         const isUsha = String(err.kode_anomali).startsWith('U');
                         const teksKeterangan = getInfoAnomali(err.kode_anomali, 'deskripsi');
                         
-                        // 🌟 BARU: Deteksi otomatis apakah item ini merupakan data bolong / isian kosong
+                        // 🌟 DETEKSI OTOMATIS: Apakah anomali ini merupakan Variabel Kosong (Missing Value)
                         const isMissingValue = String(err.kode_anomali).startsWith('M') || 
                                                teksKeterangan.toLowerCase().includes('kosong') || 
                                                teksKeterangan.toLowerCase().includes('missing');
 
-                        // 🌟 BARU: Pengkondisian warna khusus untuk menarik perhatian petugas lapangan
+                        // 🌟 DISTINGUISHED STYLING: Warna latar belakang penarik perhatian
                         const warnaBarisBg = isBelumTuntas 
-                          ? (isMissingValue ? 'bg-sky-50/70 border-sky-200 shadow-xs ring-1 ring-sky-300/30' : 'bg-red-50/70 border-amber-200/70') 
+                          ? (isMissingValue ? 'bg-sky-50/70 border-sky-300 ring-1 ring-sky-300/30' : 'bg-red-50/70 border-amber-200/70') 
                           : 'bg-emerald-50/40 border-emerald-200/50';
 
                         return (
                           <div key={err.kode_anomali} className={`pt-3 pb-2 px-2.5 rounded-xl border transition-all ${warnaBarisBg} ${i === 0 ? 'mt-0' : 'mt-2'} space-y-2.5`}>
                             <div className="flex justify-between items-start gap-3">
                               <div className="flex items-start gap-2.5">
-                                {/* 🌟 BARU: Badge kode khusus bertuliskan MISSING untuk perhatian ekstra */}
+                                {/* 🌟 ANIMATED BADGE KODE KHUSUS MISSING VALUE */}
                                 <span className={`font-black px-2 py-0.5 rounded-md text-[10px] shrink-0 mt-0.5 shadow-3xs text-white ${
                                   isMissingValue ? 'bg-sky-600 animate-pulse' : isUsha ? 'bg-amber-600' : 'bg-stone-700'
                                 }`}>
                                   {isMissingValue ? `🔍 ${err.kode_anomali}` : err.kode_anomali}
                                 </span>
                                 <div className="space-y-0.5">
-                                  <span className="font-bold text-slate-900 block leading-snug text-xs sm:text-sm flex items-center gap-1">
+                                  <span className="font-bold text-slate-900 block leading-snug text-xs sm:text-sm flex items-center gap-1.5">
                                     {teksKeterangan}
+                                    {/* PITA IDENTIFIKASI DATA KOSONG */}
                                     {isMissingValue && isBelumTuntas && (
-                                      <span className="bg-sky-200 text-sky-950 font-black text-[9px] px-1.5 py-0.2 rounded uppercase tracking-wider font-sans">ISIAN KOSONG</span>
+                                      <span className="bg-sky-200 text-sky-950 font-black text-[9px] px-1.5 py-0.2 rounded uppercase tracking-wider font-sans shadow-3xs">ISIAN KOSONG</span>
                                     )}
                                   </span>
                                   <span className="text-[11px] text-amber-900/80 bg-amber-50/60 font-medium block px-2 py-1 rounded-md border border-amber-100/70 mt-1 leading-normal">
-                                    Penjelasan Anomali: {getInfoAnomali(err.kode_anomali, 'aturan_teknis')}
+                                    Pedoman Logika: {getInfoAnomali(err.kode_anomali, 'aturan_teknis')}
                                   </span>
 
                                   {/* PITA LINIMASA SNAPSHOT */}
                                   <div className="pt-2 flex flex-wrap items-center gap-1">
-                                    <span className="text-[9px] text-stone-400 font-bold uppercase tracking-wider block mr-1">Tanggal Data:</span>
+                                    <span className="text-[9px] text-stone-400 font-bold uppercase tracking-wider block mr-1">Tanggal Anomali:</span>
                                     {err.snapshots.map(snap => {
                                       const snapBelumSelesai = snap.status_konfirmasi === 'Belum Tindak Lanjut';
                                       return (
@@ -567,10 +548,11 @@ export default function DashboardLapangan() {
 
                             {err.catatan_lapangan && (
                               <div className="p-2.5 bg-white/80 border border-stone-200 border-dashed rounded-lg text-xs text-slate-600 font-medium leading-relaxed">
-                                <span className="font-bold text-amber-900 text-[9px] block mb-0.5 uppercase tracking-wider">Justifikasi Lapangan Petugas:</span>"{err.catatan_lapangan}"
+                                <span className="font-bold text-amber-900 text-[9px] block mb-0.5 uppercase tracking-wider">Konfirmasi Terkini Petugas:</span>"{err.catatan_lapangan}"
                               </div>
                             )}
 
+                            {/* TEXT BUTTON DINAMIS SESUAI TIPE ANOMALI */}
                             <div className="flex justify-end pt-0.5">
                               <button 
                                 onClick={() => handleOpenActionModal(err, isUsha ? `${ruta.nama_unit_usaha || teksHeaderUtama} (Usaha)` : teksHeaderUtama, ruta.assignment_id)} 
@@ -580,7 +562,7 @@ export default function DashboardLapangan() {
                                     : 'bg-stone-100 text-stone-600 hover:bg-stone-200 border border-stone-200'
                                 }`}
                               >
-                                {isBelumTuntas ? (isMissingValue ? '📝 Isi Data Kosong' : '✍️ Isi Konfirmasi Anomali') : '✏️ Perbaiki Justifikasi'}
+                                {isBelumTuntas ? (isMissingValue ? '📝 Isi Data Kosong' : '✍️ Isi Konfirmasi') : '✏️ Perbaiki Konfirmasi'}
                               </button>
                             </div>
                           </div>
@@ -611,7 +593,6 @@ export default function DashboardLapangan() {
             </div>
 
             <div className="space-y-3.5">
-              {/* NOTIFIKASI PENGINGAT PETUGAS MENGENAI EFEK DOMINO */}
               <div className="bg-amber-50 border border-amber-200 p-2.5 rounded-xl text-[11px] leading-relaxed text-amber-950 font-medium">
                 💡 <strong>Informasi Sinkronisasi Linimasa:</strong> Kelompok anomali ini terdeteksi sebanyak <span className="font-black underline">{editingAnomali.snapshots?.length || 1} kali</span> di server pusat. Mengisi konfirmasi di bawah akan otomatis melunasi antrean untuk semua tanggal snapshot terkait.
               </div>
@@ -631,7 +612,7 @@ export default function DashboardLapangan() {
 
             <div className="flex gap-2.5 pt-2 border-t border-stone-100">
               <button type="button" onClick={() => setEditingAnomali(null)} className="w-1/3 border border-stone-200 rounded-xl py-2 text-xs font-bold text-slate-500 hover:bg-stone-50 transition-colors">Batal</button>
-              <button type="button" disabled={submitting} onClick={handleSaveTindakLanjut} className="w-2/3 bg-amber-600 hover:bg-amber-700 text-white rounded-xl py-2 text-xs font-bold disabled:opacity-50 shadow-xs transition-colors">{submitting ? 'Menyimpan...' : 'Simpan Konfirmasi'}</button>
+              <button type="button" disabled={submitting} onClick={handleSaveTindakLaught || handleSaveTindakLanjut} className="w-2/3 bg-amber-600 hover:bg-amber-700 text-white rounded-xl py-2 text-xs font-bold disabled:opacity-50 shadow-xs transition-colors">{submitting ? 'Menyimpan...' : 'Simpan Konfirmasi'}</button>
             </div>
           </div>
         </div>
@@ -649,12 +630,12 @@ export default function DashboardLapangan() {
               <button onClick={() => setShowPanduanModal(false)} className="bg-white/10 hover:bg-white/20 text-white text-sm font-bold w-8 h-8 rounded-full flex items-center justify-center transition-colors">✕</button>
             </div>
             
-<div className="p-6 overflow-y-auto space-y-6 text-xs sm:text-sm leading-relaxed text-slate-700">
+            <div className="p-6 overflow-y-auto space-y-6 text-xs sm:text-sm leading-relaxed text-slate-700">
               <p className="text-stone-500 font-medium bg-amber-50 p-3 rounded-lg border border-amber-200/50">
                 <strong>Perhatian Petugas:</strong> Definisikan hasil verifikasi Anda di lapangan berdasarkan aturan rules logika blok kuesioner sebelum melakukan pengisian konfirmasi.
               </p>
-              
-              {/* 🌟 BARU: SEKSI KHUSUS MISSING VALUE DI BAGIAN PALING ATAS KAMUS AGAR JADI PERHATIAN UTAMA */}
+
+              {/* 🌟 SEKSI PRIORITAS UTAMA: VARIABEL KOSONG (MISSING VALUE) DI BAGIAN PALING ATAS KAMUS */}
               <div className="space-y-3">
                 <h4 className="text-sm font-extrabold text-sky-800 uppercase tracking-wider flex items-center gap-1.5 border-b border-sky-100 pb-1.5">🔍 Variabel Kosong (Missing Value)</h4>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -664,9 +645,12 @@ export default function DashboardLapangan() {
                       <p className="text-[11px] text-sky-900/90 leading-normal">{item.aturan_teknis}</p>
                     </div>
                   ))}
+                  {masterAnomali.filter(a => String(a.kode).startsWith('M') || a.deskripsi.toLowerCase().includes('kosong')).length === 0 && (
+                    <div className="text-[11px] text-slate-400 font-medium py-2 col-span-2">Tidak ditemukan aturan isian kosong pada referensi master.</div>
+                  )}
                 </div>
               </div>
-
+              
               <div className="space-y-3 pt-2">
                 <h4 className="text-sm font-extrabold text-amber-800 uppercase tracking-wider flex items-center gap-1.5 border-b border-stone-100 pb-1.5">🏢 Anomali Usaha</h4>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
