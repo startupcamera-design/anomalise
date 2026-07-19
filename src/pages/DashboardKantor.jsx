@@ -35,6 +35,10 @@ export default function DashboardKantor() {
   const [updatingId, setUpdatingId] = useState(null);
   const [loadingModal, setLoadingModal] = useState(false);
   const [konfirmasiId, setKonfirmasiId] = useState(null);
+  // Tambahkan state ini di atas bersama state lainnya
+const [catatanPegawaiInput, setCatatanPegawaiInput] = useState('');
+const [editingCatatanId, setEditingCatatanId] = useState(null);
+const [editValue, setEditValue] = useState('');
   const [idSelesaiLokal, setIdSelesaiLokal] = useState([]);
 
   // STATE TAB MONITORING UTAMA KANTOR
@@ -489,7 +493,7 @@ const handleEksekusiUploadKeDatabase = async () => {
     try {
       const { data: sampelTarget, error } = await supabaseData
         .from('view_monitoring_anomali')
-        .select('anomali_id, assignment_id, nama_subjek, nmdesa, nmsls, nama_pcl, pcl_email, link_fasih, kode_anomali, status_konfirmasi, catatan_lapangan, status_fasih')
+        .select('anomali_id, assignment_id, nama_subjek, nmdesa, nmsls, nama_pcl, pcl_email, link_fasih, kode_anomali, status_konfirmasi, catatan_lapangan, status_fasih, catatan_pegawai')
         .eq('kdkec', itemObj.kdkec)
         .eq('pml_email', itemObj.pml_email)
         .eq('tanggal_snapshot', itemObj.tanggal_snapshot);
@@ -514,6 +518,7 @@ const handleEksekusiUploadKeDatabase = async () => {
             status_konfirmasi: a.status_konfirmasi,
             catatan_lapangan: a.catatan_lapangan,
             status_fasih: a.status_fasih,
+            catatan_pegawai: a.catatan_pegawai,
           }))
         };
       });
@@ -537,9 +542,9 @@ const handleEksekusiUploadKeDatabase = async () => {
     setIdSelesaiLokal([]);
   };
 
-  const handleSimpanFasihTunggal = async (anomaliId) => {
+const handleSimpanFasihTunggal = async (anomaliId) => {
     setUpdatingId(anomaliId);
-    setKonfirmasiId(null);
+    
     try {
       const targetSubjek = modalDetailObj.daftarSubjek.find(s => 
         s.detailAnomali.some(a => a.anomali_id === anomaliId)
@@ -559,11 +564,18 @@ const handleEksekusiUploadKeDatabase = async () => {
 
       if (errCari) throw errCari;
 
+      // Menyusun payload lengkap termasuk kolom penyesuaian catatan_pegawai
       const listPayload = daftarKembar.map(item => ({
         anomali_id: item.anomali_id,
         status_fasih: 'Sudah Tindak Lanjut FASIH',
         dieksekusi_oleh_email: profilUser?.email,
-        waktu_eksekusi_fasih: new Date().toISOString()
+        waktu_eksekusi_fasih: new Date().toISOString(),
+        
+        // 🌟 IMPLEMENTASI ATRIBUT PEMERIKSAAN PEGAWAI KANTOR
+        catatan_pegawai: catatanPegawaiInput.trim() || null,
+        status_monitoring: 'Sudah Diperiksa',
+        diperiksa_oleh_email: profilUser?.email,
+        tanggal_periksa: new Date().toISOString()
       }));
 
       const { error: errUpsert } = await supabaseData
@@ -573,6 +585,10 @@ const handleEksekusiUploadKeDatabase = async () => {
       if (errUpsert) throw errUpsert;
 
       setIdSelesaiLokal(prev => [...prev, anomaliId]);
+
+      // Bersihkan form input catatan & tutup modal konfirmasi
+      setKonfirmasiId(null);
+      setCatatanPegawaiInput('');
 
       setModalDetailObj(prev => {
         if (!prev) return null;
@@ -591,11 +607,10 @@ const handleEksekusiUploadKeDatabase = async () => {
               };
             }
             return subjek;
-          })
-        };
+          }
+        )};
       });
 
-      // 🌟 PERBAIKAN: Mutakhirkan state cache lokal agar dashboard luar ikut terupdate instan tanpa loading screen penuh
       setRawViewData(prev => prev.map(row => {
         const kecocokan = daftarKembar.some(dk => dk.anomali_id === row.anomali_id || (row.assignment_id === assignIdIdem && row.kode_anomali === kodeAnomaliIdem));
         if (kecocokan) {
@@ -611,6 +626,32 @@ const handleEksekusiUploadKeDatabase = async () => {
     }
   };
 
+  const handleSaveCatatan = async (anomaliId) => {
+  try {
+    const { error } = await supabaseData
+      .from('tindak_lanjut_anomali')
+      .update({ catatan_pegawai: editValue })
+      .eq('anomali_id', anomaliId);
+
+    if (error) throw error;
+
+    // Update state modal agar tampilan terupdate instan
+    setModalDetailObj(prev => ({
+      ...prev,
+      daftarSubjek: prev.daftarSubjek.map(s => ({
+        ...s,
+        detailAnomali: s.detailAnomali.map(a => 
+          a.anomali_id === anomaliId ? { ...a, catatan_pegawai: editValue } : a
+        )
+      }))
+    }));
+
+    setEditingCatatanId(null);
+    setEditValue('');
+  } catch (err) {
+    alert('Gagal menyimpan catatan: ' + err.message);
+  }
+};
   // 🌟 Memicu perhitungan ulang rekap pohon ketika cache lokal diperbarui (misal paska klik 'Sudah FASIH')
   useEffect(() => {
     if (rawViewData.length > 0) {
@@ -1257,34 +1298,89 @@ const handleEksekusiUploadKeDatabase = async () => {
                                     : 'bg-white'
                             }`}
                           >
-                            <div className="flex-1 space-y-2">
-                              <div className="flex items-center gap-2 flex-wrap">
-                                <span className={`text-xs font-mono font-black px-2 py-0.5 rounded ${isSelesaiFasih ? 'bg-emerald-100 text-emerald-800 line-through' : 'bg-red-100 text-red-900'}`}>{anomali.kode}</span>
-                                <span className="text-xs font-bold text-slate-700">{getInfoAnomali(anomali.kode, 'deskripsi')}</span>
-                                
-                                {isPemicuUtama ? (
-                                  <span className="text-[9px] font-black bg-amber-700 text-white px-1.5 py-0.5 rounded shadow-3xs">TERPILIH</span>
-                                ) : (
-                                  <span className="text-[9px] font-black bg-stone-500 text-white px-1.5 py-0.5 rounded shadow-3xs">LAINNYA</span>
-                                )}
-                                
-                                {anomali.status_konfirmasi === 'Sesuai Kondisi Lapangan' && <span className="text-[10px] font-extrabold bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-md border border-emerald-200 shadow-3xs">🟢 Sesuai Lapangan</span>}
-                                {anomali.status_konfirmasi === 'Perlu Perbaikan Data' && <span className="text-[10px] font-extrabold bg-rose-100 text-rose-800 px-2 py-0.5 rounded-md border border-rose-200 shadow-3xs">🔴 Perlu Perbaikan</span>}
-                                {IsSiapEksekusi && <span className="text-[9px] font-extrabold bg-amber-600 text-white px-1.5 py-0.5 rounded animate-pulse">SIAP VERIFIKASI</span>}
-                              </div>
+<div className="flex-1 space-y-3">
+  {/* Baris Tag & Header Informasi Anomali */}
+  <div className="flex items-center gap-2 flex-wrap">
+    <span className={`text-xs font-mono font-black px-2 py-0.5 rounded ${isSelesaiFasih ? 'bg-emerald-100 text-emerald-800 line-through' : 'bg-red-100 text-red-900'}`}>{anomali.kode}</span>
+    <span className="text-xs font-bold text-slate-700">{getInfoAnomali(anomali.kode, 'deskripsi')}</span>
+    
+    {isPemicuUtama ? (
+      <span className="text-[9px] font-black bg-amber-700 text-white px-1.5 py-0.5 rounded shadow-3xs">TERPILIH</span>
+    ) : (
+      <span className="text-[9px] font-black bg-stone-500 text-white px-1.5 py-0.5 rounded shadow-3xs">LAINNYA</span>
+    )}
+    
+    {anomali.status_konfirmasi === 'Sesuai Kondisi Lapangan' && <span className="text-[10px] font-extrabold bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-md border border-emerald-200 shadow-3xs">🟢 Sesuai Lapangan</span>}
+    {anomali.status_konfirmasi === 'Perlu Perbaikan Data' && <span className="text-[10px] font-extrabold bg-rose-100 text-rose-800 px-2 py-0.5 rounded-md border border-rose-200 shadow-3xs">🔴 Perlu Perbaikan</span>}
+    {IsSiapEksekusi && <span className="text-[9px] font-extrabold bg-amber-600 text-white px-1.5 py-0.5 rounded animate-pulse">SIAP VERIFIKASI</span>}
+  </div>
 
-                              {anomali.catatan_lapangan ? (
-                                <div className="p-2.5 bg-white border border-stone-200 rounded-lg text-xs text-slate-600 leading-relaxed shadow-3xs space-y-2">
-                                  <div className="flex justify-between items-center border-b border-stone-100 pb-1">
-                                    <span className="font-bold text-amber-900 text-[10px] block uppercase tracking-wide">Alasan Lapangan ({anomali.kode}):</span>
-                                    <button type="button" onClick={() => handleCopyTeks(anomali.anomali_id, anomali.catatan_lapangan)} className={`px-2 py-0.5 rounded text-[10px] font-bold border transition-all active:scale-95 ${copiedId === anomali.anomali_id ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-stone-50 text-stone-600 hover:bg-stone-100 border-stone-300'}`}>{copiedId === anomali.anomali_id ? '📋 Tersalin!' : '📄 Salin Catatan'}</button>
-                                  </div>
-                                  <div className="italic text-slate-700 font-medium">"{anomali.catatan_lapangan}"</div>
-                                </div>
-                              ) : (
-                                <p className="text-[11px] text-stone-400 font-semibold italic">⏳ Petugas lapangan belum memberikan alasan tindak lanjut.</p>
-                              )}
-                            </div>
+  {/* 🗺️ AREA KANTOR & LAPANGAN BERTUMPUK */}
+  <div className="grid grid-cols-1 gap-2.5">
+    
+    {/* A. CATATAN LAPANGAN (Petugas Lapangan) */}
+    {anomali.catatan_lapangan ? (
+      <div className="p-2.5 bg-white border border-stone-200 rounded-lg text-xs text-slate-600 leading-relaxed shadow-3xs space-y-2">
+        <div className="flex justify-between items-center border-b border-stone-100 pb-1">
+          <span className="font-bold text-amber-900 text-[10px] block uppercase tracking-wide">Alasan Lapangan ({anomali.kode}):</span>
+          <button 
+            type="button" 
+            onClick={() => handleCopyTeks(anomali.anomali_id, anomali.catatan_lapangan)} 
+            className={`px-2 py-0.5 rounded text-[10px] font-bold border transition-all active:scale-95 ${copiedId === anomali.anomali_id ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-stone-50 text-stone-600 hover:bg-stone-100 border-stone-300'}`}
+          >
+            {copiedId === anomali.anomali_id ? '📋 Tersalin!' : '📄 Salin Catatan'}
+          </button>
+        </div>
+        <div className="italic text-slate-700 font-medium">"{anomali.catatan_lapangan}"</div>
+      </div>
+    ) : (
+      <div className="p-2 bg-stone-50 rounded-lg border border-dashed border-stone-200 text-center">
+        <p className="text-[11px] text-stone-400 font-semibold italic">⏳ Petugas lapangan belum memberikan alasan tindak lanjut.</p>
+      </div>
+    )}
+
+    {/* B. CATATAN KANTOR (Evaluasi & Koreksi Pegawai - Inline Edit) */}
+    <div className="p-2.5 bg-sky-50 border border-sky-200 rounded-lg text-xs text-sky-900 shadow-3xs space-y-1">
+      <div className="flex justify-between items-center border-b border-sky-100 pb-1">
+        <span className="font-bold text-sky-900 text-[10px] block uppercase tracking-wide">
+          🏢 Penyesuaian Keterangan:
+        </span>
+        {editingCatatanId !== anomali.anomali_id ? (
+          <button 
+            type="button"
+            onClick={() => { 
+              setEditingCatatanId(anomali.anomali_id); 
+              setEditValue(anomali.catatan_pegawai || ''); 
+            }}
+            className="text-[9px] font-extrabold text-sky-700 hover:text-sky-950 underline transition-colors"
+          >
+            {anomali.catatan_pegawai ? '✏️ Edit Catatan' : '➕ Tambah Catatan'}
+          </button>
+        ) : (
+          <div className="flex gap-2 text-[9px] font-bold">
+            <button type="button" onClick={() => setEditingCatatanId(null)} className="text-red-600 hover:underline">Batal</button>
+            <button type="button" onClick={() => handleSaveCatatan(anomali.anomali_id)} className="text-emerald-700 hover:underline">Simpan</button>
+          </div>
+        )}
+      </div>
+      
+      {editingCatatanId === anomali.anomali_id ? (
+        <textarea
+          value={editValue}
+          onChange={(e) => setEditValue(e.target.value)}
+          placeholder="Tulis koreksi atau keterangan internal berkas di sini..."
+          className="w-full p-2 rounded-md border border-sky-300 bg-white text-slate-800 text-xs focus:outline-sky-600 leading-normal mt-1 shadow-inner font-sans"
+          rows="2"
+        />
+      ) : (
+        <div className={`leading-relaxed font-sans mt-0.5 ${anomali.catatan_pegawai ? 'text-sky-950 font-medium' : 'text-sky-400/80 italic font-normal'}`}>
+          {anomali.catatan_pegawai ? `"${anomali.catatan_pegawai}"` : 'Belum ada keterangan penyesuaian...'}
+        </div>
+      )}
+    </div>
+
+  </div>
+</div>
 
                             <div className="shrink-0 flex items-center md:items-end flex-row md:flex-col justify-between md:justify-start gap-2 pt-2 md:pt-0 border-t md:border-t-0 border-stone-100">
                               <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${isSelesaiFasih ? 'bg-emerald-100 text-emerald-800' : IsSiapEksekusi ? 'bg-amber-100 text-amber-900 font-extrabold' : 'bg-stone-100 text-stone-500'}`}>{isSelesaiFasih ? '✔ Selesai' : IsSiapEksekusi ? '⏳ Menunggu Anda' : '💤 Belum diisi'}</span>
@@ -1316,25 +1412,47 @@ const handleEksekusiUploadKeDatabase = async () => {
       )}
 
       {/* MODAL KONFIRMASI PERSETUJUAN */}
+{/* MODAL KONFIRMASI PERSETUJUAN & INPUT CATATAN PEGAWAI KANTOR */}
       {konfirmasiId && (
         <div className="fixed inset-0 bg-slate-950/70 z-40 flex items-center justify-center p-4 backdrop-blur-xs animate-fade-in">
-          <div className="bg-white w-full max-w-sm rounded-xl border border-stone-200 p-5 shadow-2xl space-y-4 animate-scale-up">
+          <div className="bg-white w-full max-w-md rounded-xl border border-stone-200 p-5 shadow-2xl space-y-4 animate-scale-up">
             <div className="flex items-center gap-2.5 text-orange-600">
-              <span className="text-xl">⚠️</span>
-              <h4 className="text-xs font-black uppercase tracking-wider text-slate-800">Konfirmasi Tindak Lanjut</h4>
+              <span className="text-xl">📝</span>
+              <h4 className="text-xs font-black uppercase tracking-wider text-slate-800">Verifikasi & Penyesuaian Keterangan</h4>
             </div>
             
-            <div className="space-y-2 text-xs leading-relaxed text-slate-600 font-medium">
-              <p>Apakah Anda yakin ingin menandai data ini sebagai <strong className="text-emerald-700 font-bold">"Sudah Tindak Lanjut FASIH"</strong>?</p>
+            <div className="space-y-3 text-xs leading-relaxed text-slate-650 font-medium">
+              <p>Apakah Anda sudah memeriksa aplikasi pusat FASIH dan setuju menandai data ini sebagai <strong className="text-emerald-700 font-bold">"Sudah Tindak Lanjut FASIH"</strong>?</p>
+              
+              {/* KOLOM INPUT CATATAN EVALUASI PEGAWAI */}
+              <div className="space-y-1 bg-stone-50 p-3 rounded-lg border border-stone-200">
+                <label className="text-[10px] font-black text-slate-600 block uppercase tracking-wide">
+                  🖋️ Penyesuaian Keterangan / Catatan Pegawai (Opsional):
+                </label>
+                <textarea
+                  rows="3"
+                  value={catatanPegawaiInput}
+                  onChange={(e) => setCatatanPegawaiInput(e.target.value)}
+                  placeholder="Contoh: Dokumen sudah diperbaiki di FASIH, jumlah muatan disesuaikan dari 10 menjadi 2 sesuai blok IV..."
+                  className="w-full bg-white border border-stone-300 rounded-md p-2 text-xs text-slate-800 focus:outline-amber-600 font-sans leading-normal placeholder-stone-400"
+                />
+                <span className="text-[9px] text-stone-400 font-normal block">
+                  *Tulis catatan di sini jika konfirmasi petugas lapangan kurang sesuai/butuh koreksi tambahan.
+                </span>
+              </div>
+
               <blockquote className="bg-orange-50 border-l-2 border-orange-400 p-2 rounded text-[11px] font-semibold text-orange-950 italic">
-                Penting: Pastikan data dokumen pada application pusat FASIH benar-benar telah disesuaikan pengisiannya.
+                Penting: Pastikan isian entri data pada sistem FASIH benar-benar telah diselaraskan sebelum disubmit.
               </blockquote>
             </div>
 
             <div className="flex justify-end gap-2 pt-2 border-t border-stone-100 text-xs font-bold">
               <button
                 type="button"
-                onClick={() => setKonfirmasiId(null)}
+                onClick={() => {
+                  setKonfirmasiId(null);
+                  setCatatanPegawaiInput('');
+                }}
                 className="bg-stone-100 hover:bg-stone-200 text-slate-700 px-4 py-2 rounded-lg transition-colors border"
               >
                 Batal
@@ -1342,9 +1460,9 @@ const handleEksekusiUploadKeDatabase = async () => {
               <button
                 type="button"
                 onClick={() => handleSimpanFasihTunggal(konfirmasiId)}
-                className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg shadow-sm transition-colors"
+                className="bg-emerald-600 hover:bg-emerald-700 text-white px-5 py-2 rounded-lg shadow-sm transition-colors flex items-center gap-1"
               >
-                Ya, Saya Yakin
+                🚀 Simpan & Selesaikan
               </button>
             </div>
           </div>
