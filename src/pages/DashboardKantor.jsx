@@ -313,37 +313,29 @@ const handleEksekusiUploadKeDatabase = async () => {
     setUploadProgressStatus('mengirim');
 
     console.log("%c=== [FASE 0: MEMULAI PROSES IMPOR] ===", "color: #ff9800; font-weight: bold; font-size: 14px;");
-    console.log("Tanggal Snapshot Terpilih Target Impor:", pilihanTanggalSnapshot);
-    console.log("Total Baris dari Excel yang Siap Diolah:", mappedRowItems.length);
-
+    
     try {
-      // 1. 🌟 PERBAIKAN: Hanya select kolom esensial yang PASTI ada di view_monitoring_anomali
-      console.log("Mengambil riwayat data dari database via view_monitoring_anomali...");
-      const { data: historiLengkap, error: errFetchHistori } = await supabaseData
+      // 1. Ambil riwayat lama dari view_monitoring_anomali (pastikan view ini juga memuat kolom nama_subjek)
+      const { data: historiLengkap } = await supabaseData
         .from('view_monitoring_anomali')
-        .select('assignment_id, kode_anomali, tanggal_snapshot, status_konfirmasi, catatan_lapangan, dkonfirmasi_oleh_email, tanggal_konfirmasi')
+        .select('assignment_id, kode_anomali, nama_subjek, tanggal_snapshot, status_konfirmasi, catatan_lapangan, dkonfirmasi_oleh_email, tanggal_konfirmasi')
         .not('catatan_lapangan', 'is', null);
-
-      if (errFetchHistori) {
-        console.error("❌ Gagal fetch riwayat lama:", errFetchHistori);
-      } else {
-        console.log(`✅ Berhasil mengambil ${historiLengkap?.length || 0} baris riwayat yang memiliki catatan lapangan.`);
-      }
 
       // 2. Ambil data pertama muncul untuk anomali yang belum selesai
       const { data: dataMenggantung } = await supabaseData
         .from('view_monitoring_anomali')
-        .select('assignment_id, kode_anomali, pertama_muncul_pada')
+        .select('assignment_id, kode_anomali, nama_subjek, pertama_muncul_pada')
         .not('status_fasih', 'eq', 'Sudah Tindak Lanjut FASIH');
 
       let jumlahSukses = 0;
       let jumlahGagal = 0;
       
       const petaCatatanRiwayat = {};
+      const setKunciUnikImpor = new Set(); 
 
       console.log("%c=== [FASE 1: PENCOCOKAN DI MEMORI RAM] ===", "color: #2196f3; font-weight: bold; font-size: 12px;");
 
-      const formattedData = mappedRowItems.map((item, index) => {
+      const formattedDataRaw = mappedRowItems.map((item) => {
         try {
           const aturanCocok = masterAnomali.find(a => a.kode === item.kode_anomali);
           const kategori = aturanCocok ? aturanCocok.kategori : 'USAHA';
@@ -353,21 +345,26 @@ const handleEksekusiUploadKeDatabase = async () => {
             ? 'MISSING_VALUE' 
             : 'ANOMALI';
 
+          const namaSubjekBersih = String(item.nama_subjek).trim();
+
           const temukanDataLama = dataMenggantung?.find(
-            old => old.assignment_id === item.assignment_id && old.kode_anomali === item.kode_anomali
+            old => old.assignment_id === item.assignment_id && 
+                   old.kode_anomali === item.kode_anomali &&
+                   String(old.nama_subjek).trim().toLowerCase() === namaSubjekBersih.toLowerCase()
           );
 
-          // CARI DATA SEJARAH (Snapshot masa lalu)
+          // 🌟 PENCARIAN RIWAYAT SEKARANG BERBASIS 3 KOLOM: ID + KODE + NAMA SUBJEK/USAHA
           const jejakMasaLalu = historiLengkap?.find(
             old => String(old.assignment_id).trim().toLowerCase() === String(item.assignment_id).trim().toLowerCase() && 
                    String(old.kode_anomali).trim().toLowerCase() === String(item.kode_anomali).trim().toLowerCase() && 
+                   String(old.nama_subjek).trim().toLowerCase() === namaSubjekBersih.toLowerCase() &&
                    old.tanggal_snapshot < pilihanTanggalSnapshot
           );
 
-          const keyGabung = `${String(item.assignment_id).trim()}_${String(item.kode_anomali).trim()}`;
+          // Kunci map RAM juga ditambahkan identitas nama subjek
+          const keyGabung = `${String(item.assignment_id).trim()}_${String(item.kode_anomali).trim()}_${namaSubjekBersih.toLowerCase()}`;
 
           if (jejakMasaLalu) {
-            console.log(`%c[MATCH FOUND] Baris #${index + 1} | Subjek: ${item.nama_subjek} | Key: ${keyGabung}`, "color: #4caf50; font-weight: bold;");
             petaCatatanRiwayat[keyGabung] = jejakMasaLalu;
           }
 
@@ -375,7 +372,7 @@ const handleEksekusiUploadKeDatabase = async () => {
           return {
             idsubsls: item.idsubsls,
             assignment_id: item.assignment_id,
-            nama_subjek: item.nama_subjek,
+            nama_subjek: namaSubjekBersih,
             kode_anomali: item.kode_anomali,
             kategori_anomali: kategori,
             link_fasih: item.link_fasih,
@@ -389,18 +386,27 @@ const handleEksekusiUploadKeDatabase = async () => {
         }
       }).filter(item => item !== null);
 
-      console.log(`Total data ter-mapping di RAM yang siap di-upsert: ${Object.keys(petaCatatanRiwayat).length} kunci riwayat tersimpan.`);
+      // Filter unik internal berkas (sekarang menyertakan nama_subjek)
+      const formattedData = formattedDataRaw.filter((item) => {
+        const kunciUnikBaris = `${item.assignment_id}_${item.kode_anomali}_${item.nama_subjek.toLowerCase()}_${item.tanggal_snapshot}`;
+        if (setKunciUnikImpor.has(kunciUnikBaris)) {
+          return false; 
+        }
+        setKunciUnikImpor.add(kunciUnikBaris);
+        return true;
+      });
 
       if (formattedData.length > 0) {
         console.log("%c=== [FASE 2: PROSES UPSERT KE DATABASE] ===", "color: #9c27b0; font-weight: bold; font-size: 12px;");
         
+        // Aturan conflict target otomatis menyesuaikan dengan constraint baru di database
         const { data: dataBaruDisisipkan, error } = await supabaseData
           .from('anomali_data')
           .upsert(formattedData, {
-            onConflict: 'assignment_id, kode_anomali, tanggal_snapshot',
+            onConflict: 'assignment_id, kode_anomali, nama_subjek, tanggal_snapshot',
             ignoreDuplicates: false 
           })
-          .select('id, assignment_id, kode_anomali');
+          .select('id, assignment_id, kode_anomali, nama_subjek');
 
         if (error) throw error;
 
@@ -410,7 +416,7 @@ const handleEksekusiUploadKeDatabase = async () => {
           const payloadTindakLanjut = [];
 
           dataBaruDisisipkan.forEach((barisBaru) => {
-            const keyCari = `${String(barisBaru.assignment_id).trim()}_${String(barisBaru.kode_anomali).trim()}`;
+            const keyCari = `${String(barisBaru.assignment_id).trim()}_${String(barisBaru.kode_anomali).trim()}_${String(barisBaru.nama_subjek).trim().toLowerCase()}`;
             const dataLamaDitemukan = petaCatatanRiwayat[keyCari];
 
             if (dataLamaDitemukan) {
@@ -420,7 +426,7 @@ const handleEksekusiUploadKeDatabase = async () => {
                 catatan_lapangan: dataLamaDitemukan.catatan_lapangan,
                 dkonfirmasi_oleh_email: dataLamaDitemukan.dkonfirmasi_oleh_email,
                 tanggal_konfirmasi: dataLamaDitemukan.tanggal_konfirmasi,
-                status_monitoring: 'Belum Diperiksa', // Menggunakan nilai default aman sesuai skema tabel
+                status_monitoring: 'Belum Diperiksa',
                 catatan_pegawai: null,
                 diperiksa_oleh_email: null,
                 tanggal_periksa: null,
