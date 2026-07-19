@@ -814,37 +814,46 @@ const handleEksekusiUploadKeDatabase = async () => {
         return (
           <React.Fragment key={kec.kodeKec}>
             {/* 🗺️ LEVEL 1: BARIS KECAMATAN */}
-            <tr 
-              onClick={() => toggleExpandKec(kec.namaKec)} 
-              className="bg-stone-200/60 hover:bg-stone-200 text-slate-900 font-extrabold cursor-pointer transition-colors border-b border-stone-300"
-            >
-              <td className="p-3 pl-4 flex items-center gap-2">
-                <span className="text-stone-400 text-[9px] font-mono w-4 text-center">{isKecOpen ? '▼' : '▶'}</span>
-                <span className="tracking-tight text-xs">🗺️ [{kec.kodeKec}] KEC. {kec.namaKec}</span>
-              </td>
-              <td className="p-3 text-center text-stone-400 font-mono text-xs">-</td>
-              <td className="p-3 text-center font-mono font-black text-slate-800">{kecTotal}</td>
-              
-              {/* KANTONG PROGRES PCL */}
-              <td className="p-3 bg-amber-50/5">
-                <div className="flex items-center gap-3">
-                  <div className="flex-1 bg-stone-300/60 h-2.5 rounded-full overflow-hidden p-[1px] shadow-inner">
-                    <div className={`h-full rounded-full bg-gradient-to-r ${warnaTermal(persenPcl)}`} style={{ width: `${persenPcl}%` }}></div>
-                  </div>
-                  <span className="font-mono text-[11px] w-12 text-right text-amber-900">{persenPcl.toFixed(0)}%</span>
-                </div>
-              </td>
-              
-              {/* KANTONG PROGRES FASIH */}
-              <td className="p-3 bg-emerald-50/5 border-l border-stone-200/80">
-                <div className="flex items-center gap-3">
-                  <div className="flex-1 bg-stone-300/60 h-2.5 rounded-full overflow-hidden p-[1px] shadow-inner">
-                    <div className={`h-full rounded-full bg-gradient-to-r ${warnaTermal(persenFasih)}`} style={{ width: `${persenFasih}%` }}></div>
-                  </div>
-                  <span className="font-mono text-[11px] w-12 text-right text-emerald-900">{persenFasih.toFixed(0)}%</span>
-                </div>
-              </td>
-            </tr>
+{/* 🗺️ LEVEL 1: BARIS KECAMATAN (Gaya Minimalis Kontras Tinggi) */}
+<tr 
+  onClick={() => toggleExpandKec(kec.namaKec)} 
+  className={`hover:bg-amber-50/40 text-slate-900 font-extrabold cursor-pointer transition-colors border-b border-stone-200 ${
+    isKecOpen ? 'bg-amber-50/20 border-l-[4px] border-l-amber-700' : 'bg-white border-l-[4px] border-l-stone-300'
+  }`}
+>
+  <td className="p-3.5 pl-3 flex items-center gap-2">
+    {/* Warna arrow dibuat lebih tegas agar navigasi klik terlihat jelas */}
+    <span className={`text-[9px] font-mono w-4 text-center ${isKecOpen ? 'text-amber-800' : 'text-stone-400'}`}>
+      {isKecOpen ? '▼' : '▶'}
+    </span>
+    <span className="tracking-tight text-xs uppercase font-black">
+      🗺️ [{kec.kodeKec}] KEC. {kec.namaKec}
+    </span>
+  </td>
+  <td className="p-3.5 text-center text-stone-300 font-mono text-xs">-</td>
+  <td className="p-3.5 text-center font-mono font-black text-slate-800">{kecTotal}</td>
+  
+  {/* KANTONG PROGRES PCL */}
+  <td className="p-3 bg-amber-50/5">
+    <div className="flex items-center gap-3">
+      {/* Background container progress bar dibuat lebih smooth (bg-stone-100) */}
+      <div className="flex-1 bg-stone-100 h-2.5 rounded-full overflow-hidden p-[1px] shadow-xs">
+        <div className={`h-full rounded-full bg-gradient-to-r ${warnaTermal(persenPcl)}`} style={{ width: `${persenPcl}%` }}></div>
+      </div>
+      <span className="font-mono text-[11px] w-12 text-right text-amber-950 font-bold">{persenPcl.toFixed(0)}%</span>
+    </div>
+  </td>
+  
+  {/* KANTONG PROGRES FASIH */}
+  <td className="p-3 bg-emerald-50/5 border-l border-stone-200/80">
+    <div className="flex items-center gap-3">
+      <div className="flex-1 bg-stone-100 h-2.5 rounded-full overflow-hidden p-[1px] shadow-xs">
+        <div className={`h-full rounded-full bg-gradient-to-r ${warnaTermal(persenFasih)}`} style={{ width: `${persenFasih}%` }}></div>
+      </div>
+      <span className="font-mono text-[11px] w-12 text-right text-emerald-955 font-bold">{persenFasih.toFixed(0)}%</span>
+    </div>
+  </td>
+</tr>
 
             {/* 📅 LEVEL 2: SNAPSHOT */}
             {isKecOpen && kec.snapshotList.map(snap => {
@@ -917,7 +926,15 @@ const handleEksekusiUploadKeDatabase = async () => {
                             <td className="p-2.5 font-mono text-center text-slate-600 bg-amber-50/5">
                               <span className="text-amber-700 font-semibold">{item.sudahPcl}</span>
                               <span className="text-stone-300 mx-1">/</span>
-                              <span className="text-stone-400 text-[10px]">Sisa: {item.belumPcl}</span>
+                              {item.belumPcl > 0 ? (
+  <span className="text-[10px] bg-amber-100 text-amber-900 font-extrabold px-1.5 py-0.5 rounded-sm tracking-wide">
+    Belum: {item.belumPcl}
+  </span>
+) : (
+  <span className="text-[10px] text-stone-400 font-normal italic">
+    Selesai
+  </span>
+)}
                             </td>
                             
                             {/* TARGET KOLOM DATA SEBARAN FASIH */}
