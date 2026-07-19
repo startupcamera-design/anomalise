@@ -303,7 +303,7 @@ const prosesStrukturAgregat = (data) => {
     ));
   };
 
-  const handleEksekusiUploadKeDatabase = async () => {
+const handleEksekusiUploadKeDatabase = async () => {
     const adaYangMasihErr = mappedRowItems.some(item => item.kode_anomali === 'ERR');
     if (adaYangMasihErr) {
       alert('Masih ada baris data yang berkode ERR. Silakan tentukan manual terlebih dahulu melalui dropdown yang disediakan!');
@@ -312,12 +312,25 @@ const prosesStrukturAgregat = (data) => {
 
     setUploadProgressStatus('mengirim');
 
-    try {
-      const { data: historiLengkap } = await supabaseData
-        .from('view_monitoring_anomali')
-        .select('assignment_id, kode_anomali, pertama_muncul_pada, tanggal_snapshot, status_konfirmasi, catatan_lapangan, dkonfirmasi_oleh_email, tanggal_konfirmasi, status_monitoring, catatan_pegawai, diperiksa_oleh_email, tanggal_periksa')
-        .not('status_konfirmasi', 'eq', 'Belum Tindak Lanjut');
+    console.log("%c=== [FASE 0: MEMULAI PROSES IMPOR] ===", "color: #ff9800; font-weight: bold; font-size: 14px;");
+    console.log("Tanggal Snapshot Terpilih Target Impor:", pilihanTanggalSnapshot);
+    console.log("Total Baris dari Excel yang Siap Diolah:", mappedRowItems.length);
 
+    try {
+      // 1. 🌟 PERBAIKAN: Hanya select kolom esensial yang PASTI ada di view_monitoring_anomali
+      console.log("Mengambil riwayat data dari database via view_monitoring_anomali...");
+      const { data: historiLengkap, error: errFetchHistori } = await supabaseData
+        .from('view_monitoring_anomali')
+        .select('assignment_id, kode_anomali, tanggal_snapshot, status_konfirmasi, catatan_lapangan, dkonfirmasi_oleh_email, tanggal_konfirmasi')
+        .not('catatan_lapangan', 'is', null);
+
+      if (errFetchHistori) {
+        console.error("❌ Gagal fetch riwayat lama:", errFetchHistori);
+      } else {
+        console.log(`✅ Berhasil mengambil ${historiLengkap?.length || 0} baris riwayat yang memiliki catatan lapangan.`);
+      }
+
+      // 2. Ambil data pertama muncul untuk anomali yang belum selesai
       const { data: dataMenggantung } = await supabaseData
         .from('view_monitoring_anomali')
         .select('assignment_id, kode_anomali, pertama_muncul_pada')
@@ -325,8 +338,12 @@ const prosesStrukturAgregat = (data) => {
 
       let jumlahSukses = 0;
       let jumlahGagal = 0;
+      
+      const petaCatatanRiwayat = {};
 
-      const formattedData = mappedRowItems.map((item) => {
+      console.log("%c=== [FASE 1: PENCOCOKAN DI MEMORI RAM] ===", "color: #2196f3; font-weight: bold; font-size: 12px;");
+
+      const formattedData = mappedRowItems.map((item, index) => {
         try {
           const aturanCocok = masterAnomali.find(a => a.kode === item.kode_anomali);
           const kategori = aturanCocok ? aturanCocok.kategori : 'USAHA';
@@ -339,6 +356,20 @@ const prosesStrukturAgregat = (data) => {
           const temukanDataLama = dataMenggantung?.find(
             old => old.assignment_id === item.assignment_id && old.kode_anomali === item.kode_anomali
           );
+
+          // CARI DATA SEJARAH (Snapshot masa lalu)
+          const jejakMasaLalu = historiLengkap?.find(
+            old => String(old.assignment_id).trim().toLowerCase() === String(item.assignment_id).trim().toLowerCase() && 
+                   String(old.kode_anomali).trim().toLowerCase() === String(item.kode_anomali).trim().toLowerCase() && 
+                   old.tanggal_snapshot < pilihanTanggalSnapshot
+          );
+
+          const keyGabung = `${String(item.assignment_id).trim()}_${String(item.kode_anomali).trim()}`;
+
+          if (jejakMasaLalu) {
+            console.log(`%c[MATCH FOUND] Baris #${index + 1} | Subjek: ${item.nama_subjek} | Key: ${keyGabung}`, "color: #4caf50; font-weight: bold;");
+            petaCatatanRiwayat[keyGabung] = jejakMasaLalu;
+          }
 
           jumlahSukses++;
           return {
@@ -358,41 +389,54 @@ const prosesStrukturAgregat = (data) => {
         }
       }).filter(item => item !== null);
 
+      console.log(`Total data ter-mapping di RAM yang siap di-upsert: ${Object.keys(petaCatatanRiwayat).length} kunci riwayat tersimpan.`);
+
       if (formattedData.length > 0) {
+        console.log("%c=== [FASE 2: PROSES UPSERT KE DATABASE] ===", "color: #9c27b0; font-weight: bold; font-size: 12px;");
+        
         const { data: dataBaruDisisipkan, error } = await supabaseData
           .from('anomali_data')
           .upsert(formattedData, {
             onConflict: 'assignment_id, kode_anomali, tanggal_snapshot',
-            ignoreDuplicates: true
+            ignoreDuplicates: false 
           })
           .select('id, assignment_id, kode_anomali');
 
         if (error) throw error;
 
         if (dataBaruDisisipkan && dataBaruDisisipkan.length > 0) {
+          console.log("%c=== [FASE 3: PENYUSUNAN PAYLOAD TINDAK LANJUT] ===", "color: #e91e63; font-weight: bold; font-size: 12px;");
+          
           const payloadTindakLanjut = [];
 
-          dataBaruDisisipkan.forEach(barisBaru => {
-            const jejakMasaLalu = historiLengkap?.find(
-              old => old.assignment_id === barisBaru.assignment_id && 
-                     old.kode_anomali === barisBaru.kode_anomali && 
-                     old.tanggal_snapshot < pilihanTanggalSnapshot
-            );
+          dataBaruDisisipkan.forEach((barisBaru) => {
+            const keyCari = `${String(barisBaru.assignment_id).trim()}_${String(barisBaru.kode_anomali).trim()}`;
+            const dataLamaDitemukan = petaCatatanRiwayat[keyCari];
 
-            if (jejakMasaLalu) {
+            if (dataLamaDitemukan) {
               payloadTindakLanjut.push({
                 anomali_id: barisBaru.id, 
-                status_konfirmasi: jejakMasaLalu.status_konfirmasi,
-                catatan_lapangan: jejakMasaLalu.catatan_lapangan,
-                dkonfirmasi_oleh_email: jejakMasaLalu.dkonfirmasi_oleh_email,
-                tanggal_konfirmasi: jejakMasaLalu.tanggal_konfirmasi,
-                status_monitoring: jejakMasaLalu.status_monitoring,
-                catatan_pegawai: jejakMasaLalu.catatan_pegawai,
-                diperiksa_oleh_email: jejakMasaLalu.diperiksa_oleh_email,
-                tanggal_periksa: jejakMasaLalu.tanggal_periksa,
+                status_konfirmasi: dataLamaDitemukan.status_konfirmasi,
+                catatan_lapangan: dataLamaDitemukan.catatan_lapangan,
+                dkonfirmasi_oleh_email: dataLamaDitemukan.dkonfirmasi_oleh_email,
+                tanggal_konfirmasi: dataLamaDitemukan.tanggal_konfirmasi,
+                status_monitoring: 'Belum Diperiksa', // Menggunakan nilai default aman sesuai skema tabel
+                catatan_pegawai: null,
+                diperiksa_oleh_email: null,
+                tanggal_periksa: null,
                 status_fasih: 'Belum Tindak Lanjut FASIH',
                 dieksekusi_oleh_email: null,
                 waktu_eksekusi_fasih: null
+              });
+            } else {
+              payloadTindakLanjut.push({
+                anomali_id: barisBaru.id,
+                status_konfirmasi: 'Belum Tindak Lanjut',
+                catatan_lapangan: null,
+                dkonfirmasi_oleh_email: null,
+                tanggal_konfirmasi: null,
+                status_monitoring: 'Belum Diperiksa',
+                status_fasih: 'Belum Tindak Lanjut FASIH'
               });
             }
           });
@@ -416,7 +460,7 @@ const prosesStrukturAgregat = (data) => {
       fetchDataMonitoringKantor();
 
     } catch (err) {
-      console.error(err);
+      console.error("%c❌ PROSES IMPOR GAGAL TOTAL:", "color: red; font-weight: bold;", err);
       alert('Gagal mengimpor data anomali: ' + err.message);
       setModalUploadReview(false);
       setUploading(false);
