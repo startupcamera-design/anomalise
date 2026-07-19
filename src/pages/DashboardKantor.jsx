@@ -666,7 +666,7 @@ const handleEksekusiUploadKeDatabase = async () => {
   return (
     <div className="min-h-screen bg-stone-50 text-slate-700 font-sans antialiased">
       {/* NAVBAR */}
-      <div className="bg-gradient-to-r from-amber-800 to-orange-900 text-white shadow-sm sticky top-0 z-10">
+      <div className="bg-gradient-to-r from-amber-800 to-orange-900 text-white shadow-sm sticky top-0 z-30">
         <div className="max-w-7xl mx-auto px-6 h-16 flex justify-between items-center">
           <div className="space-y-0.5">
             <h1 className="text-base font-black tracking-tight text-amber-50">SIMALI</h1>
@@ -771,121 +771,177 @@ const handleEksekusiUploadKeDatabase = async () => {
             </div>
           </div>
 
-          <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse text-xs sm:text-sm table-fixed">
-              <thead>
-                <tr className="bg-stone-100 text-slate-600 font-bold border-b border-stone-200 text-[11px] uppercase tracking-wider">
-                  <th className="p-3 pl-6 w-[40%]">Wilayah Tugas / Deskripsi Masalah</th>
-                  <th className="p-3 text-center w-[8%]">Kode</th>
-                  <th className="p-3 text-center w-[10%]">Total</th>
-                  <th className="p-3 text-center bg-amber-50/20 w-[10%]">Sudah Konfirmasi</th>
-                  <th className="p-3 text-center bg-amber-50/20 w-[10%] border-r border-stone-200/60">Belum Konfirmasi</th>
-                  <th className="p-3 text-center bg-emerald-50/20 w-[11%] text-emerald-800">Sudah Fasih</th>
-                  <th className="p-3 text-center bg-orange-50/40 w-[11%] text-orange-800">Belum Fasih</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-stone-200">
-                {treeData.map(kec => {
-                  const isKecOpen = !!expandedKec[kec.namaKec];
-                  let kecTotal = 0, kecSudahPcl = 0, kecBelumPcl = 0, kecSudahF = 0, kecBelumF = 0;
+<div className="overflow-x-auto rounded-xl border border-stone-200 shadow-2xs bg-white">
+  <table className="w-full text-left border-collapse text-xs sm:text-sm table-fixed min-w-[900px]">
+    <thead>
+      {/* Tetap melayang pas di bawah Navbar (h-16), z-index aman */}
+      <tr className="sticky top-0 z-20 bg-stone-100 text-slate-650 font-black border-b border-stone-200 text-[10px] uppercase tracking-wider shadow-2xs">
+        <th className="p-3.5 pl-6 w-[40%]">Struktur Wilayah / Deskripsi Masalah</th>
+        <th className="p-3.5 text-center w-[8%]">Kode</th>
+        <th className="p-3.5 text-center w-[8%]">Total Anomali</th>
+        <th className="p-3.5 text-center w-[22%] bg-amber-50/20">Progres Konfirmasi Petugas</th>
+        <th className="p-3.5 text-center w-[22%] bg-emerald-50/20 border-l border-stone-200">Progres Konfirmasi Fasih</th>
+      </tr>
+    </thead>
+    <tbody className="divide-y divide-stone-150 select-none">
+      {treeData.map(kec => {
+        const isKecOpen = !!expandedKec[kec.namaKec];
+        let kecTotal = 0, kecSudahPcl = 0, kecBelumPcl = 0, kecSudahF = 0, kecBelumF = 0;
 
-                  kec.snapshotList.forEach(s => {
-                    s.pmlList.forEach(p => {
-                      p.kodeList.forEach(c => {
-                        kecTotal += c.total; kecSudahPcl += c.sudahPcl; kecBelumPcl += c.belumPcl;
-                        kecSudahF += c.sudahFasih; kecBelumF += c.belumFasih;
-                      });
-                    });
-                  });
+        kec.snapshotList.forEach(s => {
+          s.pmlList.forEach(p => {
+            p.kodeList.forEach(c => {
+              kecTotal += c.total; 
+              kecSudahPcl += c.sudahPcl; 
+              kecBelumPcl += c.belumPcl;
+              kecSudahF += c.sudahFasih; 
+              kecBelumF += c.belumFasih;
+            });
+          });
+        });
 
-                  return (
-                    <React.Fragment key={kec.kodeKec}>
-                      <tr onClick={() => toggleExpandKec(kec.namaKec)} className="bg-stone-50/80 hover:bg-amber-50/20 font-bold text-slate-900 cursor-pointer transition-colors border-b border-stone-200">
-                        <td className="p-3 pl-6"><span className="text-amber-700 mr-2">{isKecOpen ? '▼' : '▶'}</span>🗺️ [{kec.kodeKec}] KEC. {kec.namaKec}</td>
-                        <td className="p-3 text-center text-stone-300">-</td>
-                        <td className="p-3 text-center font-mono">{kecTotal}</td>
-                        <td className="p-3 text-center bg-amber-50/10 font-mono text-amber-700">{kecSudahPcl}</td>
-                        <td className="p-3 text-center bg-amber-50/10 font-mono text-orange-600 border-r border-stone-200/60">{kecBelumPcl}</td>
-                        <td className="p-3 text-center bg-emerald-50/5 font-mono text-emerald-700">{kecSudahF}</td>
-                        <td className="p-3 text-center bg-orange-50/10 font-mono text-orange-700">{kecBelumF}</td>
+        // Hitung persentase untuk Progress Bar Termal Kecamatan
+        const persenPcl = kecTotal > 0 ? (kecSudahPcl / kecTotal) * 100 : 0;
+        const persenFasih = kecTotal > 0 ? (kecSudahF / kecTotal) * 100 : 0;
+
+        // Fungsi pembangun gradien warna dinamis (Merah -> Kuning -> Hijau)
+        const warnaTermal = (persen) => {
+          if (persen < 50) return 'from-rose-500 to-red-600';
+          if (persen < 80) return 'from-amber-400 to-yellow-500';
+          return 'from-emerald-400 to-green-600';
+        };
+
+        return (
+          <React.Fragment key={kec.kodeKec}>
+            {/* 🗺️ LEVEL 1: BARIS KECAMATAN */}
+            <tr 
+              onClick={() => toggleExpandKec(kec.namaKec)} 
+              className="bg-stone-200/60 hover:bg-stone-200 text-slate-900 font-extrabold cursor-pointer transition-colors border-b border-stone-300"
+            >
+              <td className="p-3 pl-4 flex items-center gap-2">
+                <span className="text-stone-400 text-[9px] font-mono w-4 text-center">{isKecOpen ? '▼' : '▶'}</span>
+                <span className="tracking-tight text-xs">🗺️ [{kec.kodeKec}] KEC. {kec.namaKec}</span>
+              </td>
+              <td className="p-3 text-center text-stone-400 font-mono text-xs">-</td>
+              <td className="p-3 text-center font-mono font-black text-slate-800">{kecTotal}</td>
+              
+              {/* KANTONG PROGRES PCL */}
+              <td className="p-3 bg-amber-50/5">
+                <div className="flex items-center gap-3">
+                  <div className="flex-1 bg-stone-300/60 h-2.5 rounded-full overflow-hidden p-[1px] shadow-inner">
+                    <div className={`h-full rounded-full bg-gradient-to-r ${warnaTermal(persenPcl)}`} style={{ width: `${persenPcl}%` }}></div>
+                  </div>
+                  <span className="font-mono text-[11px] w-12 text-right text-amber-900">{persenPcl.toFixed(0)}%</span>
+                </div>
+              </td>
+              
+              {/* KANTONG PROGRES FASIH */}
+              <td className="p-3 bg-emerald-50/5 border-l border-stone-200/80">
+                <div className="flex items-center gap-3">
+                  <div className="flex-1 bg-stone-300/60 h-2.5 rounded-full overflow-hidden p-[1px] shadow-inner">
+                    <div className={`h-full rounded-full bg-gradient-to-r ${warnaTermal(persenFasih)}`} style={{ width: `${persenFasih}%` }}></div>
+                  </div>
+                  <span className="font-mono text-[11px] w-12 text-right text-emerald-900">{persenFasih.toFixed(0)}%</span>
+                </div>
+              </td>
+            </tr>
+
+            {/* 📅 LEVEL 2: SNAPSHOT */}
+            {isKecOpen && kec.snapshotList.map(snap => {
+              const snapKey = `${kec.kodeKec}_${snap.tglSnapshot}`;
+              const isSnapOpen = !!expandedSnap[snapKey];
+
+              let snapTotal = 0, snapSudahPcl = 0, snapSudahF = 0;
+              snap.pmlList.forEach(p => {
+                p.kodeList.forEach(c => {
+                  snapTotal += c.total; 
+                  snapSudahPcl += c.sudahPcl; 
+                  snapSudahF += c.sudahFasih;
+                });
+              });
+
+              return (
+                <React.Fragment key={snap.tglSnapshot}>
+                  <tr 
+                    onClick={() => toggleExpandSnap(kec.kodeKec, snap.tglSnapshot)} 
+                    className="bg-stone-100/60 hover:bg-stone-100 text-slate-700 border-b border-stone-200/60 text-xs cursor-pointer transition-colors"
+                  >
+                    <td className="p-2.5 pl-10 border-l-[3px] border-l-stone-400/80 font-semibold flex items-center gap-1.5">
+                      <span className="text-stone-400 text-[8px] w-3 text-center">{isSnapOpen ? '▼' : '▶'}</span>
+                      <span className="text-stone-600">📅 Snapshot: {formatTanggalIndo(snap.tglSnapshot)}</span>
+                    </td>
+                    <td className="p-2.5 text-center text-stone-300">-</td>
+                    <td className="p-2.5 text-center font-mono text-stone-600">{snapTotal}</td>
+                    <td className="p-2.5 text-center font-mono text-amber-700 font-bold bg-amber-50/5">Sudah Konf Petugas: {snapSudahPcl}</td>
+                    <td className="p-2.5 text-center font-mono text-emerald-700 font-bold bg-emerald-50/5 border-l border-stone-200/40">Sudah Konf Fasih: {snapSudahF}</td>
+                  </tr>
+
+                  {/* 👔 LEVEL 3: PML / PENGAWAS */}
+                  {isSnapOpen && snap.pmlList.map(pml => (
+                    <React.Fragment key={pml.namaPml}>
+                      <tr className="bg-white/80 text-slate-600 border-b border-stone-100 text-xs font-medium">
+                        <td className="p-2 pl-16 border-l-[3px] border-l-stone-300/60 flex items-center gap-2">
+                          <span className="text-slate-400">👔</span>
+                          <span>PML: <strong className="text-slate-800 font-bold">{pml.namaPml}</strong></span>
+                        </td>
+                        <td colSpan="4" className="p-2 text-stone-400 font-mono text-[10px] italic pl-4">{pml.emailPml}</td>
                       </tr>
 
-                      {isKecOpen && kec.snapshotList.map(snap => {
-                        const snapKey = `${kec.kodeKec}_${snap.tglSnapshot}`;
-                        const isSnapOpen = !!expandedSnap[snapKey];
-
-                        let snapTotal = 0, snapSudahPcl = 0, snapBelumPcl = 0, snapSudahF = 0, snapBelumF = 0;
-                        snap.pmlList.forEach(p => {
-                          p.kodeList.forEach(c => {
-                            snapTotal += c.total; snapSudahPcl += c.sudahPcl; snapBelumPcl += c.belumPcl;
-                            snapSudahF += c.sudahFasih; snapBelumF += c.belumFasih;
-                          });
-                        });
-
+                      {/* ⚠️ LEVEL 4: ANOMALI DATA */}
+                      {pml.kodeList.map(item => {
+                        const adaAntreanFasih = item.belumFasih > 0;
                         return (
-                          <React.Fragment key={snap.tglSnapshot}>
-                            <tr 
-                              onClick={() => toggleExpandSnap(kec.kodeKec, snap.tglSnapshot)}
-                              className="bg-amber-50/30 text-slate-700 border-b border-stone-100 font-semibold text-xs cursor-pointer hover:bg-amber-100/40 select-none transition-colors"
-                            >
-                              <td className="p-2 pl-10 text-[11px] text-amber-900 tracking-wide uppercase font-bold">
-                                <span className="text-amber-800 mr-2 inline-block transition-transform">{isSnapOpen ? '▼' : '▶'}</span>
-                                📅 Tanggal Snapshot: <span className="font-black underline">{formatTanggalIndo(snap.tglSnapshot)}</span>
-                              </td>
-                              <td className="p-2 text-center text-stone-300">-</td>
-                              <td className="p-2 text-center font-mono text-[11px] text-amber-955 font-bold">{snapTotal}</td>
-                              <td className="p-2 text-center font-mono text-[11px] text-amber-700 font-bold">{snapSudahPcl}</td>
-                              <td className="p-2 text-center font-mono text-[11px] text-orange-600 font-bold border-r border-stone-200/60">{snapBelumPcl}</td>
-                              <td className="p-2 text-center font-mono text-[11px] text-emerald-700 font-bold">{snapSudahF}</td>
-                              <td className="p-2 text-center font-mono text-[11px] text-orange-700 font-bold">{snapBelumF}</td>
-                            </tr>
-
-                            {isSnapOpen && snap.pmlList.map(pml => (
-                              <React.Fragment key={pml.namaPml}>
-                                <tr className="bg-white font-medium text-slate-800 border-b border-stone-100 text-xs">
-                                  <td className="p-2 pl-14 text-slate-700">└─ 👔 Pengawas (PML): <span className="font-bold text-slate-900">{pml.namaPml}</span></td>
-                                  <td colSpan="6" className="p-2 text-stone-400 text-[10px] font-mono italic">{pml.emailPml}</td>
-                                </tr>
-
-                                {pml.kodeList.map(item => {
-                                  const adaAntreanFasih = item.belumFasih > 0;
-                                  return (
-                                    <tr
-                                      key={item.kode}
-                                      onClick={() => handleBukaModalDetail(item, kec.namaKec)}
-                                      className={`text-xs border-b border-stone-100 transition-colors cursor-pointer select-none ${adaAntreanFasih ? 'bg-orange-50/40 hover:bg-orange-50' : 'hover:bg-stone-50/50 text-slate-500'}`}
-                                    >
-                                      <td className="p-2.5 pl-24 font-medium truncate flex items-center gap-1.5">
-                                        <span className="text-stone-300 font-bold">└─</span>
-                                        {adaAntreanFasih && (
-                                          <span className="bg-orange-600 text-white font-black text-[8px] px-1.5 py-0.2 rounded-md animate-pulse tracking-wide shrink-0 font-sans">BUTUH INPUT</span>
-                                        )}
-                                        <span className={adaAntreanFasih ? 'font-bold text-slate-900' : ''}>
-                                          {getInfoAnomali(item.kode, 'deskripsi')}
-                                        </span>
-                                      </td>
-                                      <td className="p-2.5 text-center">
-                                        <span className={`font-mono font-black px-1.5 py-0.5 rounded text-[10px] ${adaAntreanFasih ? 'bg-orange-200 text-orange-900' : 'bg-stone-100 text-stone-600'}`}>{item.kode}</span>
-                                      </td>
-                                      <td className="p-2.5 text-center font-mono">{item.total}</td>
-                                      <td className="p-2.5 text-center bg-amber-50/10 font-mono text-amber-700 font-medium">{item.sudahPcl}</td>
-                                      <td className="p-2.5 text-center bg-amber-50/10 font-mono text-stone-400 border-r border-stone-200/60">{item.belumPcl}</td>
-                                      <td className="p-2.5 text-center bg-emerald-50/5 font-mono text-emerald-700 font-medium">{item.sudahFasih}</td>
-                                      <td className={`p-2.5 text-center font-mono font-black ${adaAntreanFasih ? 'text-orange-700 bg-orange-100/40' : 'text-stone-400'}`}>{adaAntreanFasih ? `⚠️ ${item.belumFasih}` : '0'}</td>
-                                    </tr>
-                                  );
-                                })}
-                              </React.Fragment>
-                            ))}
-                          </React.Fragment>
+                          <tr
+                            key={item.kode}
+                            onClick={() => handleBukaModalDetail(item, kec.namaKec)}
+                            className={`text-xs border-b border-stone-100 transition-colors cursor-pointer ${
+                              adaAntreanFasih 
+                                ? 'bg-orange-50/40 hover:bg-orange-50 border-l-[3px] border-l-orange-500 font-medium' 
+                                : 'hover:bg-stone-50/60 text-slate-500'
+                            }`}
+                          >
+                            <td className="p-2.5 pl-24 font-normal truncate flex items-center gap-2">
+                              {adaAntreanFasih && (
+                                <span className="bg-orange-600 text-white font-black text-[7px] px-1 rounded-xs tracking-wider uppercase shrink-0">BUTUH VERIFIKASI</span>
+                              )}
+                              <span className={adaAntreanFasih ? 'font-semibold text-slate-900' : ''}>
+                                {getInfoAnomali(item.kode, 'deskripsi')}
+                              </span>
+                            </td>
+                            <td className="p-2.5 text-center">
+                              <span className={`font-mono font-bold px-1.5 py-0.5 rounded text-[10px] ${adaAntreanFasih ? 'bg-orange-100 text-orange-900' : 'bg-stone-100 text-stone-600'}`}>{item.kode}</span>
+                            </td>
+                            <td className="p-2.5 text-center font-mono font-bold text-slate-700">{item.total}</td>
+                            
+                            {/* TARGET KOLOM DATA SEBARAN PCL */}
+                            <td className="p-2.5 font-mono text-center text-slate-600 bg-amber-50/5">
+                              <span className="text-amber-700 font-semibold">{item.sudahPcl}</span>
+                              <span className="text-stone-300 mx-1">/</span>
+                              <span className="text-stone-400 text-[10px]">Sisa: {item.belumPcl}</span>
+                            </td>
+                            
+                            {/* TARGET KOLOM DATA SEBARAN FASIH */}
+                            <td className={`p-2.5 font-mono text-center bg-emerald-50/5 border-l border-stone-200/40 ${adaAntreanFasih ? 'bg-orange-50/20' : ''}`}>
+                              <span className="text-emerald-700 font-semibold">{item.sudahFasih}</span>
+                              <span className="text-stone-300 mx-1">/</span>
+                              <span className={`text-[10px] ${adaAntreanFasih ? 'text-orange-600 font-bold bg-orange-100/50 px-1 rounded' : 'text-stone-400'}`}>
+                                {adaAntreanFasih ? `⚠️ Antrean: ${item.belumFasih}` : '0'}
+                              </span>
+                            </td>
+                          </tr>
                         );
                       })}
                     </React.Fragment>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
+                  ))}
+                </React.Fragment>
+              );
+            })}
+          </React.Fragment>
+        );
+      })}
+    </tbody>
+  </table>
+</div>
         </div>
       </div>
 
