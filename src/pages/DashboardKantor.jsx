@@ -1303,7 +1303,7 @@ export default function DashboardKantor() {
                       {subjek.detailAnomali.map(anomali => {
                         const isSelesaiFasih = anomali.status_fasih === 'Sudah Tindak Lanjut FASIH';
                         const belumAdaKeteranganLapangan = !anomali.catatan_lapangan || anomali.status_konfirmasi === 'Belum Tindak Lanjut';
-                        const IsSiapEksekusi = !isSelesaiFasih && !belumAdaKeteranganLapangan;
+                        const IsSiapEksekusi = !isSelesaiFasih;
                         const isPemicuUtama = anomali.kode === modalDetailObj.kodePemicu;
 
                         const handleCopyTeks = (id, teks) => {
