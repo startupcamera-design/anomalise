@@ -25,7 +25,7 @@ export default function DashboardKantor() {
   const [treeData, setTreeData] = useState([]);
   const [copiedId, setCopiedId] = useState(null);
 
-  // CACHE STATE GLOBAL: Menyimpan data asli dari database agar tidak fetch berulang-ulang
+  // CACHE STATE GLOBAL
   const [rawViewData, setRawViewData] = useState([]);
 
   // STATE FILTER SNAPSHOT
@@ -57,7 +57,11 @@ export default function DashboardKantor() {
   const [excelHeaders, setExcelHeaders] = useState([]);
   const [mappedRowItems, setMappedRowItems] = useState([]);
 
-  // State untuk menyimpan peta (mapping) pilihan user
+  // State Rekap Anomali Unik untuk Review Cepat
+  const [groupedAnomali, setGroupedAnomali] = useState([]);
+  const [filterReviewTab, setFilterReviewTab] = useState('semua'); // 'semua' | 'err_only'
+
+  // State mapping pilihan kolom excel
   const [columnMap, setColumnMap] = useState({
     assignment_id: '',
     nama_subjek: '',
@@ -104,7 +108,6 @@ export default function DashboardKantor() {
       const dbRows = data || [];
       setRawViewData(dbRows);
 
-      // Ekstrak daftar tanggal snapshot yang unik & urutkan dari yang terbaru (descending)
       const daftarTanggal = [...new Set(dbRows.map(item => item.tanggal_snapshot))]
         .filter(Boolean)
         .sort((a, b) => b.localeCompare(a));
@@ -119,14 +122,11 @@ export default function DashboardKantor() {
     }
   };
 
-  // FUNGSI OPTIMALISASI UTAMA: Memilah data langsung di RAM browser berdasarkan Tab & Snapshot
   const filterDanProsesDataLokal = (semuaData, tabAktif, snapshotDipilih, daftarTglSnap = availableSnapshots) => {
-    // 1. Filter Tipe Masalah
     let dataTerfilter = semuaData.filter(item => 
       (item.tipe_masalah || 'ANOMALI') === tabAktif
     );
 
-    // 2. Filter Berdasarkan Tanggal Snapshot Yang Dipilih
     if (snapshotDipilih === 'terakhir' && daftarTglSnap.length > 0) {
       const tglTerbaru = daftarTglSnap[0];
       dataTerfilter = dataTerfilter.filter(item => item.tanggal_snapshot === tglTerbaru);
@@ -280,20 +280,23 @@ export default function DashboardKantor() {
     e.target.value = '';
   };
 
+  // PROSES DATA: PISAH DENGAN FRASA 'ANOMALI' + REKAP UNIK
   const handleProsesReviewBarisData = () => {
     if (!columnMap.assignment_id || !columnMap.nama_subjek || !columnMap.nama_anomali) {
       alert('Mohon petakan kolom minimal untuk ID Assignment, Nama Subjek, dan Nama Anomali!');
       return;
     }
 
-    const itemHasilOlahan = rawExcelData.map((row, index) => {
-      const namaAnomaliRaw = row[columnMap.nama_anomali] || '';
+    const itemHasilOlahan = [];
+    let counterLokal = 0;
 
-      const aturanCocok = masterAnomali.find(aturan =>
-        String(namaAnomaliRaw).toLowerCase().includes(aturan.kata_kunci.toLowerCase())
-      );
+    rawExcelData.forEach((row, rowIndex) => {
+      const rawAnomaliTeks = String(row[columnMap.nama_anomali] || '').trim();
 
-      const kodeAnomali = aturanCocok ? aturanCocok.kode : 'ERR';
+      // Split presisi berdasarkan kata "Anomali" (Case-Insensitive)
+      const daftarAnomaliTeks = rawAnomaliTeks
+        ? rawAnomaliTeks.split(/(?:,|\n|;)?\s*(?=Anomali)/i).filter(Boolean)
+        : [''];
 
       const desaRaw = columnMap.kodedesa ? String(row[columnMap.kodedesa] || '') : '';
       const slsRaw = columnMap.sls ? String(row[columnMap.sls] || '') : '';
@@ -304,31 +307,69 @@ export default function DashboardKantor() {
       const subSls = subSlsRaw.trim().padStart(2, '0');
       const generatedIdSubSls = `${desa}${sls}${subSls}`;
 
-      return {
-        id_lokal: index,
-        idsubsls: generatedIdSubSls,
-        assignment_id: String(row[columnMap.assignment_id] || `GEN-${Date.now()}-${index}`),
-        nama_subjek: row[columnMap.nama_subjek] || 'Tanpa Nama',
-        teks_anomali_asli: String(namaAnomaliRaw), 
-        kode_anomali: kodeAnomali,
-        link_fasih: columnMap.link_fasih ? (row[columnMap.link_fasih] || '') : ''
-      };
+      daftarAnomaliTeks.forEach((teksSatuan) => {
+        const teksBersih = teksSatuan.trim().replace(/^[,;\s]+|[,;\s]+$/g, '');
+        if (!teksBersih) return;
+
+        const aturanCocok = masterAnomali.find(aturan =>
+          teksBersih.toLowerCase().includes(aturan.kata_kunci.toLowerCase())
+        );
+
+        const kodeAnomali = aturanCocok ? aturanCocok.kode : 'ERR';
+
+        itemHasilOlahan.push({
+          id_lokal: counterLokal++,
+          baris_excel_asli: rowIndex + 1,
+          idsubsls: generatedIdSubSls,
+          assignment_id: String(row[columnMap.assignment_id] || `GEN-${Date.now()}-${counterLokal}`),
+          nama_subjek: row[columnMap.nama_subjek] || 'Tanpa Nama',
+          teks_anomali_asli: teksBersih, 
+          kode_anomali: kodeAnomali,
+          link_fasih: columnMap.link_fasih ? (row[columnMap.link_fasih] || '') : ''
+        });
+      });
     });
 
     setMappedRowItems(itemHasilOlahan);
+
+    // REKAP TEKS UNIK UNTUK MODAL REVIEW
+    const rekapMap = {};
+    itemHasilOlahan.forEach(item => {
+      const keyTeks = item.teks_anomali_asli;
+      if (!rekapMap[keyTeks]) {
+        rekapMap[keyTeks] = {
+          teks_anomali_asli: keyTeks,
+          kode_anomali: item.kode_anomali,
+          jumlah_baris: 0,
+          sampel_subjek: item.nama_subjek
+        };
+      }
+      rekapMap[keyTeks].jumlah_baris += 1;
+    });
+
+    const daftarRekap = Object.values(rekapMap).sort((a, b) => b.jumlah_baris - a.jumlah_baris);
+    setGroupedAnomali(daftarRekap);
+    setFilterReviewTab('semua');
     setUploadProgressStatus('review_rows'); 
   };
 
-  const handleUbahKodeBarisManual = (idLokal, kodeBaru) => {
+  // UBAH KODE REKAP -> OTOMATIS UPDATE SEMUA BARIS DERIVATIFNYA
+  const handleUbahKodeRekap = (teksAnomaliTarget, kodeBaru) => {
+    // 1. Update di Rekap Unik
+    setGroupedAnomali(prev => prev.map(item => 
+      item.teks_anomali_asli === teksAnomaliTarget ? { ...item, kode_anomali: kodeBaru } : item
+    ));
+
+    // 2. Cascade Update ke Seluruh Baris Data Individu
     setMappedRowItems(prev => prev.map(item => 
-      item.id_lokal === idLokal ? { ...item, kode_anomali: kodeBaru } : item
+      item.teks_anomali_asli === teksAnomaliTarget ? { ...item, kode_anomali: kodeBaru } : item
     ));
   };
 
   const handleEksekusiUploadKeDatabase = async () => {
     const adaYangMasihErr = mappedRowItems.some(item => item.kode_anomali === 'ERR');
     if (adaYangMasihErr) {
-      alert('Masih ada baris data yang berkode ERR. Silakan tentukan manual terlebih dahulu melalui dropdown yang disediakan!');
+      alert('Masih ada jenis anomali yang berkode ERR. Silakan tentukan manual kodenya pada rekapitulasi di bawah ini!');
       return;
     }
 
@@ -690,6 +731,13 @@ export default function DashboardKantor() {
     return 0;
   });
 
+  // Hitung berapa jenis teks anomali yang masih ERR
+  const jumlahTeksErr = groupedAnomali.filter(a => a.kode_anomali === 'ERR').length;
+  const rekapTersaring = groupedAnomali.filter(a => {
+    if (filterReviewTab === 'err_only') return a.kode_anomali === 'ERR';
+    return true;
+  });
+
   if (loading && masterAnomali.length === 0) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-stone-50 text-slate-500 font-sans text-xs font-bold">
@@ -816,25 +864,7 @@ export default function DashboardKantor() {
         <div className="bg-white rounded-xl border border-stone-200 shadow-2xs overflow-hidden">
           <div className="p-4 bg-stone-50 border-b flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
             <h2 className="text-xs font-bold uppercase tracking-wider text-slate-500">
-             
-                        <div className="bg-white p-2 rounded-2xl border border-stone-200 shadow-2xs flex items-center gap-2">
-            <span className="text-xs font-bold text-slate-600 pl-2">📅 Tanggal Anomali:</span>
-            <select
-              value={selectedSnapshot}
-              onChange={(e) => setSelectedSnapshot(e.target.value)}
-              className="bg-stone-100 font-bold border border-stone-300 rounded-xl px-3 py-2 text-xs text-slate-800 focus:outline-amber-600 cursor-pointer"
-            >
-              <option value="terakhir">🌟 Anomali Terakhir ({availableSnapshots[0] ? formatTanggalIndo(availableSnapshots[0]) : '-'})</option>
-              <option value="semua">📚 Semua Anomali (Akumulasi)</option>
-              <optgroup label="-- Riwayat Snapshot Anomali --">
-                {availableSnapshots.map(tgl => (
-                  <option key={tgl} value={tgl}>
-                    {formatTanggalIndo(tgl)}
-                  </option>
-                ))}
-              </optgroup>
-            </select>
-          </div>
+              📊 MONITORING ANOMALI PER WILAYAH & PETUGAS
             </h2>
             
             <div className="flex flex-wrap items-center gap-2">
@@ -1031,7 +1061,7 @@ export default function DashboardKantor() {
         </div>
       </div>
 
-      {/* MODAL PROSES & REVIEW IMPOR EXCEL CERDAS */}
+      {/* MODAL PROSES & REVIEW IMPOR EXCEL CERDAS (MODAL REKAP UNIK) */}
       {modalUploadReview && (
         <div className="fixed inset-0 bg-slate-950/70 z-50 flex items-center justify-center p-4 backdrop-blur-xs animate-fade-in">
           <div className={`bg-white w-full rounded-2xl border border-stone-200 p-6 shadow-2xl space-y-5 animate-scale-up transition-all ${uploadProgressStatus === 'review_rows' ? 'max-w-4xl' : 'max-w-md'}`}>
@@ -1039,7 +1069,7 @@ export default function DashboardKantor() {
             <div className="flex items-center gap-2.5 text-amber-800 border-b pb-3">
               <span className="text-xl">📊</span>
               <h3 className="text-sm font-black uppercase tracking-wider text-slate-800">
-                {uploadProgressStatus === 'review_rows' ? '🛠️ Validasi Dropdown Override Per Baris' : 'Manajer Snapshot Excel'}
+                {uploadProgressStatus === 'review_rows' ? '⚡ Rekapitulasi Jenis Anomali Unik' : 'Manajer Snapshot Excel'}
               </h3>
             </div>
 
@@ -1104,60 +1134,107 @@ export default function DashboardKantor() {
                     onClick={handleProsesReviewBarisData} 
                     className="bg-amber-700 hover:bg-amber-600 text-white px-5 py-2 rounded-xl shadow-md shadow-amber-900/20"
                   >
-                    Lanjut Tinjau Baris ➡️
+                    Lanjut Tinjau Rekap ➡️
                   </button>
                 </div>
               </div>
             )}
 
+            {/* HALAMAN REVIEW REKAP UNIK */}
             {uploadProgressStatus === 'review_rows' && (
               <div className="space-y-4">
-                <div className="bg-amber-50 border border-amber-200 p-3 rounded-xl text-xs text-amber-900 font-medium">
-                  💡 <strong>Informasi:</strong> Di bawah ini adalah daftar baris berkas Excel Anda. Sistem menandai anomali yang tidak lolos aturan otomatis dengan kode <span className="bg-red-200 text-red-900 font-bold px-1 rounded">ERR</span>. Anda diwajibkan memilih manual melalui dropdown sebelum sinkronisasi dijalankan.
+                
+                {/* BANNER RINGKASAN REKAP */}
+                <div className="bg-amber-50 border border-amber-200 p-3 rounded-xl text-xs text-amber-900 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-3xs">
+                  <div>
+                    <p className="font-bold">
+                      💡 Terdeteksi <span className="text-amber-800 font-mono text-sm">{groupedAnomali.length}</span> Jenis Teks Anomali Unik dari total <span className="font-mono font-bold">{mappedRowItems.length}</span> baris data.
+                    </p>
+                    <p className="text-[11px] text-amber-800/80 mt-0.5">
+                      Pilih kode anomali sekali saja per jenis teks unik, otomatis seluruh baris responden yang memiliki teks tersebut akan langsung terbarui.
+                    </p>
+                  </div>
+
+                  {/* FILTER QUICK ACCESS ERR */}
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => setFilterReviewTab('semua')}
+                      className={`px-3 py-1.5 rounded-lg font-bold text-xs transition-all ${filterReviewTab === 'semua' ? 'bg-amber-800 text-white shadow-xs' : 'bg-white border text-slate-600 hover:bg-stone-100'}`}
+                    >
+                      Semua ({groupedAnomali.length})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setFilterReviewTab('err_only')}
+                      className={`px-3 py-1.5 rounded-lg font-bold text-xs transition-all ${filterReviewTab === 'err_only' ? 'bg-red-600 text-white shadow-xs' : 'bg-red-50 border border-red-200 text-red-700 hover:bg-red-100'}`}
+                    >
+                      ⚠️ Hanya ERR ({jumlahTeksErr})
+                    </button>
+                  </div>
                 </div>
 
+                {/* TABEL REKAP KODE ANOMALI UNIK */}
                 <div className="overflow-x-auto border rounded-xl max-h-[50vh] bg-stone-50 shadow-inner">
                   <table className="w-full text-left border-collapse text-xs">
                     <thead>
                       <tr className="bg-stone-200 text-slate-700 font-bold border-b sticky top-0 z-10">
                         <th className="p-2.5 w-[5%] text-center">No</th>
-                        <th className="p-2.5 w-[25%]">Nama Responden / Subjek</th>
-                        <th className="p-2.5 w-[40%] bg-amber-100/30">
-                          Teks Kolom Excel Asli (<span className="underline italic">{columnMap.nama_anomali}</span>)
-                        </th>
-                        <th className="p-2.5 w-[30%]">Aturan / Kode Dipetakan</th>
+                        <th className="p-2.5 w-[42%] bg-amber-100/30">Teks Deskripsi Anomali Unik</th>
+                        <th className="p-2.5 w-[13%] text-center">Frekuensi Baris</th>
+                        <th className="p-2.5 w-[40%]">Petakan Ke Aturan / Kode Master</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-stone-200 bg-white">
-                      {mappedRowItems.map((item, idx) => {
-                        const isErr = item.kode_anomali === 'ERR';
-                        return (
-                          <tr key={item.id_lokal} className={`hover:bg-stone-50/70 transition-colors ${isErr ? 'bg-red-50/40' : ''}`}>
-                            <td className="p-2.5 text-center font-mono text-slate-400">{idx + 1}</td>
-                            <td className="p-2.5 font-bold text-slate-900">
-                              {item.nama_subjek}
-                              <span className="block text-[10px] font-mono text-stone-400 font-medium">ID: {item.assignment_id}</span>
-                            </td>
-                            <td className="p-2.5 italic text-slate-700 font-medium bg-amber-50/10 leading-relaxed">
-                              "{item.teks_anomali_asli}"
-                            </td>
-                            <td className="p-2.5">
-                              <select
-                                value={item.kode_anomali}
-                                onChange={(e) => handleUbahKodeBarisManual(item.id_lokal, e.target.value)}
-                                className={`w-full p-2 border rounded-md text-xs font-medium focus:ring-1 outline-none transition-all ${isErr ? 'bg-red-100 border-red-300 text-red-900 font-black animate-pulse focus:ring-red-500' : 'bg-white border-stone-300 text-slate-800 focus:ring-amber-600'}`}
-                              >
-                                <option value="ERR" disabled>❌ -- KODE TIDAK TERDETEKSI (ERR) --</option>
-                                {masterAnomali.map((rules) => (
-                                  <option key={rules.kode} value={rules.kode}>
-                                    [{rules.kode}] {rules.deskripsi}
-                                  </option>
-                                ))}
-                              </select>
-                            </td>
-                          </tr>
-                        );
-                      })}
+                      {rekapTersaring.length === 0 ? (
+                        <tr>
+                          <td colSpan="4" className="text-center py-10 text-stone-400 font-bold">
+                            {filterReviewTab === 'err_only' ? '🎉 Luar biasa! Tidak ada jenis anomali yang berkode ERR.' : 'Tidak ada data rekap.'}
+                          </td>
+                        </tr>
+                      ) : (
+                        rekapTersaring.map((rekap, idx) => {
+                          const isErr = rekap.kode_anomali === 'ERR';
+                          return (
+                            <tr key={rekap.teks_anomali_asli} className={`hover:bg-stone-50/80 transition-colors ${isErr ? 'bg-red-50/40' : ''}`}>
+                              <td className="p-2.5 text-center font-mono text-slate-400 font-bold">
+                                {idx + 1}
+                              </td>
+                              <td className="p-2.5 leading-relaxed">
+                                <span className="font-bold text-slate-800 italic block">
+                                  "{rekap.teks_anomali_asli}"
+                                </span>
+                                <span className="text-[10px] text-stone-400 font-sans block mt-0.5">
+                                  Contoh Subjek: {rekap.sampel_subjek}
+                                </span>
+                              </td>
+                              <td className="p-2.5 text-center font-mono font-black">
+                                <span className="bg-amber-100 text-amber-900 px-2 py-0.5 rounded-full text-[11px]">
+                                  {rekap.jumlah_baris} baris
+                                </span>
+                              </td>
+                              <td className="p-2.5">
+                                <select
+                                  value={rekap.kode_anomali}
+                                  onChange={(e) => handleUbahKodeRekap(rekap.teks_anomali_asli, e.target.value)}
+                                  className={`w-full p-2 border rounded-md text-xs font-medium focus:ring-1 outline-none transition-all ${
+                                    isErr 
+                                      ? 'bg-red-100 border-red-400 text-red-950 font-black animate-pulse focus:ring-red-500' 
+                                      : 'bg-white border-stone-300 text-slate-800 focus:ring-amber-600'
+                                  }`}
+                                >
+                                  <option value="ERR" disabled>❌ -- KODE TIDAK TERDETEKSI (ERR) --</option>
+                                  {masterAnomali.map((rules) => (
+                                    <option key={rules.kode} value={rules.kode}>
+                                      [{rules.kode}] {rules.deskripsi}
+                                    </option>
+                                  ))}
+                                </select>
+                              </td>
+                            </tr>
+                          );
+                        })
+                      )}
                     </tbody>
                   </table>
                 </div>
@@ -1302,7 +1379,6 @@ export default function DashboardKantor() {
                     <div className="divide-y divide-stone-100">
                       {subjek.detailAnomali.map(anomali => {
                         const isSelesaiFasih = anomali.status_fasih === 'Sudah Tindak Lanjut FASIH';
-                        const belumAdaKeteranganLapangan = !anomali.catatan_lapangan || anomali.status_konfirmasi === 'Belum Tindak Lanjut';
                         const IsSiapEksekusi = !isSelesaiFasih;
                         const isPemicuUtama = anomali.kode === modalDetailObj.kodePemicu;
 
@@ -1327,7 +1403,6 @@ export default function DashboardKantor() {
                             }`}
                           >
                             <div className="flex-1 space-y-3">
-                              {/* Baris Tag & Header Informasi Anomali */}
                               <div className="flex items-center gap-2 flex-wrap">
                                 <span className={`text-xs font-mono font-black px-2 py-0.5 rounded ${isSelesaiFasih ? 'bg-emerald-100 text-emerald-800 line-through' : 'bg-red-100 text-red-900'}`}>{anomali.kode}</span>
                                 <span className="text-xs font-bold text-slate-700">{getInfoAnomali(anomali.kode, 'deskripsi')}</span>
@@ -1343,10 +1418,7 @@ export default function DashboardKantor() {
                                 {IsSiapEksekusi && <span className="text-[9px] font-extrabold bg-amber-600 text-white px-1.5 py-0.5 rounded animate-pulse">SIAP VERIFIKASI</span>}
                               </div>
 
-                              {/* 🗺️ AREA KANTOR & LAPANGAN BERTUMPUK */}
                               <div className="grid grid-cols-1 gap-2.5">
-                                
-                                {/* A. CATATAN LAPANGAN (Petugas Lapangan) */}
                                 {anomali.catatan_lapangan ? (
                                   <div className="p-2.5 bg-white border border-stone-200 rounded-lg text-xs text-slate-600 leading-relaxed shadow-3xs space-y-2">
                                     <div className="flex justify-between items-center border-b border-stone-100 pb-1">
@@ -1367,7 +1439,6 @@ export default function DashboardKantor() {
                                   </div>
                                 )}
 
-                                {/* B. CATATAN KANTOR (Evaluasi & Koreksi Pegawai - Inline Edit) */}
                                 <div className="p-2.5 bg-sky-50 border border-sky-200 rounded-lg text-xs text-sky-900 shadow-3xs space-y-1">
                                   <div className="flex justify-between items-center border-b border-sky-100 pb-1">
                                     <span className="font-bold text-sky-900 text-[10px] block uppercase tracking-wide">
@@ -1439,7 +1510,7 @@ export default function DashboardKantor() {
         </div>
       )}
 
-      {/* MODAL KONFIRMASI PERSETUJUAN & INPUT CATATAN PEGAWAI KANTOR */}
+      {/* MODAL KONFIRMASI PERSETUJUAN */}
       {konfirmasiId && (
         <div className="fixed inset-0 bg-slate-950/70 z-40 flex items-center justify-center p-4 backdrop-blur-xs animate-fade-in">
           <div className="bg-white w-full max-w-md rounded-xl border border-stone-200 p-5 shadow-2xl space-y-4 animate-scale-up">
@@ -1451,7 +1522,6 @@ export default function DashboardKantor() {
             <div className="space-y-3 text-xs leading-relaxed text-slate-650 font-medium">
               <p>Apakah Anda sudah memeriksa aplikasi pusat FASIH dan setuju menandai data ini sebagai <strong className="text-emerald-700 font-bold">"Sudah Tindak Lanjut FASIH"</strong>?</p>
               
-              {/* KOLOM INPUT CATATAN EVALUASI PEGAWAI */}
               <div className="space-y-1 bg-stone-50 p-3 rounded-lg border border-stone-200">
                 <label className="text-[10px] font-black text-slate-600 block uppercase tracking-wide">
                   🖋️ Penyesuaian Keterangan / Catatan Pegawai (Opsional):
@@ -1460,12 +1530,9 @@ export default function DashboardKantor() {
                   rows="3"
                   value={catatanPegawaiInput}
                   onChange={(e) => setCatatanPegawaiInput(e.target.value)}
-                  placeholder="Contoh: Dokumen sudah diperbaiki di FASIH, jumlah muatan disesuaikan dari 10 menjadi 2 sesuai blok IV..."
+                  placeholder="Contoh: Dokumen sudah diperbaiki di FASIH, jumlah muatan disesuaikan..."
                   className="w-full bg-white border border-stone-300 rounded-md p-2 text-xs text-slate-800 focus:outline-amber-600 font-sans leading-normal placeholder-stone-400"
                 />
-                <span className="text-[9px] text-stone-400 font-normal block">
-                  *Tulis catatan di sini jika konfirmasi petugas lapangan kurang sesuai/butuh koreksi tambahan.
-                </span>
               </div>
 
               <blockquote className="bg-orange-50 border-l-2 border-orange-400 p-2 rounded text-[11px] font-semibold text-orange-950 italic">
