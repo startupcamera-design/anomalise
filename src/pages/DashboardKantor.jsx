@@ -587,112 +587,134 @@ export default function DashboardKantor() {
     setIdSelesaiLokal([]);
   };
 
-  const handleSimpanFasihTunggal = async (anomaliId) => {
-    setUpdatingId(anomaliId);
+const handleSimpanFasihTunggal = async (anomaliId) => {
+  // 1. Cari data anomali target yang sedang dikonfirmasi
+  const targetSubjek = modalDetailObj?.daftarSubjek.find(s => 
+    s.detailAnomali.some(a => a.anomali_id === anomaliId)
+  );
+  const detailAnomaliTarget = targetSubjek?.detailAnomali.find(a => a.anomali_id === anomaliId);
 
-    try {
-      const targetSubjek = modalDetailObj.daftarSubjek.find(s => 
-        s.detailAnomali.some(a => a.anomali_id === anomaliId)
-      );
-      const detailAnomaliTarget = targetSubjek?.detailAnomali.find(a => a.anomali_id === anomaliId);
+  const catatanPetugas = detailAnomaliTarget?.catatan_lapangan?.trim() || '';
+  const penyesuaianPegawai = catatanPegawaiInput.trim();
 
-      if (!targetSubjek || !detailAnomaliTarget) throw new Error("Data lokal tidak sinkron");
+  // 2. VALIDASI: Cek apakah KEDUA keterangan kosong
+  if (!catatanPetugas && !penyesuaianPegawai) {
+    alert('⚠️ Mohon berikan keterangan terlebih dahulu! Minimal salah satu antara Catatan Petugas Lapangan atau Penyesuaian Keterangan Pegawai harus terisi.');
+    return; // Hentikan eksekusi jika dua-duanya kosong
+  }
 
-      const assignIdIdem = targetSubjek.assignment_id;
-      const kodeAnomaliIdem = detailAnomaliTarget.kode;
+  setUpdatingId(anomaliId);
 
-      const { data: daftarKembar, error: errCari } = await supabaseData
-        .from('view_monitoring_anomali')
-        .select('anomali_id')
-        .eq('assignment_id', assignIdIdem)
-        .eq('kode_anomali', kodeAnomaliIdem);
+  try {
+    if (!targetSubjek || !detailAnomaliTarget) throw new Error("Data lokal tidak sinkron");
 
-      if (errCari) throw errCari;
+    const assignIdIdem = targetSubjek.assignment_id;
+    const kodeAnomaliIdem = detailAnomaliTarget.kode;
 
-      const listPayload = daftarKembar.map(item => ({
-        anomali_id: item.anomali_id,
-        status_fasih: 'Sudah Tindak Lanjut FASIH',
-        dieksekusi_oleh_email: profilUser?.email,
-        waktu_eksekusi_fasih: new Date().toISOString(),
+    const { data: daftarKembar, error: errCari } = await supabaseData
+      .from('view_monitoring_anomali')
+      .select('anomali_id')
+      .eq('assignment_id', assignIdIdem)
+      .eq('kode_anomali', kodeAnomaliIdem);
 
-        catatan_pegawai: catatanPegawaiInput.trim() || null,
-        status_monitoring: 'Sudah Diperiksa',
-        diperiksa_oleh_email: profilUser?.email,
-        tanggal_periksa: new Date().toISOString()
-      }));
+    if (errCari) throw errCari;
 
-      const { error: errUpsert } = await supabaseData
-        .from('tindak_lanjut_anomali')
-        .upsert(listPayload, { onConflict: 'anomali_id' });
+    const listPayload = daftarKembar.map(item => ({
+      anomali_id: item.anomali_id,
+      status_fasih: 'Sudah Tindak Lanjut FASIH',
+      dieksekusi_oleh_email: profilUser?.email,
+      waktu_eksekusi_fasih: new Date().toISOString(),
 
-      if (errUpsert) throw errUpsert;
+      catatan_pegawai: penyesuaianPegawai || null,
+      status_monitoring: 'Sudah Diperiksa',
+      diperiksa_oleh_email: profilUser?.email,
+      tanggal_periksa: new Date().toISOString()
+    }));
 
-      setIdSelesaiLokal(prev => [...prev, anomaliId]);
+    const { error: errUpsert } = await supabaseData
+      .from('tindak_lanjut_anomali')
+      .upsert(listPayload, { onConflict: 'anomali_id' });
 
-      setKonfirmasiId(null);
-      setCatatanPegawaiInput('');
+    if (errUpsert) throw errUpsert;
 
-      setModalDetailObj(prev => {
-        if (!prev) return null;
-        return {
-          ...prev,
-          daftarSubjek: prev.daftarSubjek.map(subjek => {
-            if (subjek.assignment_id === assignIdIdem) {
-              return {
-                ...subjek,
-                detailAnomali: subjek.detailAnomali.map(anomali => {
-                  if (anomali.kode === kodeAnomaliIdem) {
-                    return { ...anomali, status_fasih: 'Sudah Tindak Lanjut FASIH' };
-                  }
-                  return anomali;
-                })
-              };
-            }
-            return subjek;
-          })
-        };
-      });
+    setIdSelesaiLokal(prev => [...prev, anomaliId]);
 
-      setRawViewData(prev => prev.map(row => {
-        const kecocokan = daftarKembar.some(dk => dk.anomali_id === row.anomali_id || (row.assignment_id === assignIdIdem && row.kode_anomali === kodeAnomaliIdem));
-        if (kecocokan) {
-          return { ...row, status_fasih: 'Sudah Tindak Lanjut FASIH', status_konfirmasi: row.status_konfirmasi === 'Belum Tindak Lanjut' ? 'Sesuai Kondisi Lapangan' : row.status_konfirmasi };
-        }
-        return row;
-      }));
+    setKonfirmasiId(null);
+    setCatatanPegawaiInput('');
 
-    } catch (err) {
-      alert('Gagal memperbarui status: ' + err.message);
-    } finally {
-      setUpdatingId(null);
-    }
-  };
-
-  const handleSaveCatatan = async (anomaliId) => {
-    try {
-      const { error } = await supabaseData
-        .from('tindak_lanjut_anomali')
-        .update({ catatan_pegawai: editValue })
-        .eq('anomali_id', anomaliId);
-
-      if (error) throw error;
-
-      setModalDetailObj(prev => ({
+    setModalDetailObj(prev => {
+      if (!prev) return null;
+      return {
         ...prev,
-        daftarSubjek: prev.daftarSubjek.map(s => ({
-          ...s,
-          detailAnomali: s.detailAnomali.map(a => 
-            a.anomali_id === anomaliId ? { ...a, catatan_pegawai: editValue } : a
-          )
-        }))
-      }));
+        daftarSubjek: prev.daftarSubjek.map(subjek => {
+          if (subjek.assignment_id === assignIdIdem) {
+            return {
+              ...subjek,
+              detailAnomali: subjek.detailAnomali.map(anomali => {
+                if (anomali.kode === kodeAnomaliIdem) {
+                  return { 
+                    ...anomali, 
+                    status_fasih: 'Sudah Tindak Lanjut FASIH',
+                    catatan_pegawai: penyesuaianPegawai || null
+                  };
+                }
+                return anomali;
+              })
+            };
+          }
+          return subjek;
+        })
+      };
+    });
 
-      setEditingCatatanId(null);
-      setEditValue('');
-    } catch (err) {
-      alert('Gagal menyimpan catatan: ' + err.message);
-    }
-  };
+    setRawViewData(prev => prev.map(row => {
+      const kecocokan = daftarKembar.some(dk => dk.anomali_id === row.anomali_id || (row.assignment_id === assignIdIdem && row.kode_anomali === kodeAnomaliIdem));
+      if (kecocokan) {
+        return { 
+          ...row, 
+          status_fasih: 'Sudah Tindak Lanjut FASIH', 
+          status_konfirmasi: row.status_konfirmasi === 'Belum Tindak Lanjut' ? 'Sesuai Kondisi Lapangan' : row.status_konfirmasi 
+        };
+      }
+      return row;
+    }));
+
+  } catch (err) {
+    alert('Gagal memperbarui status: ' + err.message);
+  } finally {
+    setUpdatingId(null);
+  }
+};
+
+const handleSaveCatatan = async (anomaliId) => {
+  try {
+    const { error } = await supabaseData
+      .from('tindak_lanjut_anomali')
+      .update({ catatan_pegawai: editValue })
+      .eq('anomali_id', anomaliId);
+
+    if (error) throw error;
+
+    // ➕ Update state modal secara lokal (UI langsung berubah seketika)
+    setModalDetailObj(prev => ({
+      ...prev,
+      daftarSubjek: prev.daftarSubjek.map(s => ({
+        ...s,
+        detailAnomali: s.detailAnomali.map(a => 
+          a.anomali_id === anomaliId ? { ...a, catatan_pegawai: editValue } : a
+        )
+      }))
+    }));
+
+    // ➕ Sinkronkan juga ke input modal konfirmasi jika sedang aktif
+    setCatatanPegawaiInput(editValue);
+
+    setEditingCatatanId(null);
+    setEditValue('');
+  } catch (err) {
+    alert('Gagal menyimpan catatan: ' + err.message);
+  }
+};
 
   const toggleExpandKec = (kecName) => {
     setExpandedKec(prev => ({ ...prev, [kecName]: !prev[kecName] }));
@@ -703,24 +725,36 @@ export default function DashboardKantor() {
     setExpandedSnap(prev => ({ ...prev, [compositeKey]: !prev[compositeKey] }));
   };
 
-  const semuaSubjekModal = modalDetailObj?.daftarSubjek || [];
-  const jumlahSiapEksekusi = semuaSubjekModal.filter(subjek => 
-    subjek.detailAnomali.some(a => a.status_fasih !== 'Sudah Tindak Lanjut FASIH' && a.status_konfirmasi !== 'Belum Tindak Lanjut' && a.catatan_lapangan)
-  ).length;
-  const jumlahSelesai = semuaSubjekModal.filter(subjek => subjek.detailAnomali.every(a => a.status_fasih === 'Sudah Tindak Lanjut FASIH')).length;
-  const jumlahSemua = semuaSubjekModal.length;
+const semuaSubjekModal = modalDetailObj?.daftarSubjek || [];
+const jumlahSiapEksekusi = semuaSubjekModal.filter(subjek => 
+  subjek.detailAnomali.some(a => a.status_fasih !== 'Sudah Tindak Lanjut FASIH' && a.status_konfirmasi !== 'Belum Tindak Lanjut' && a.catatan_lapangan)
+).length;
 
-  const subjekTersaring = semuaSubjekModal.filter(subjek => {
-    const isSelesaiSemuaMurni = subjek.detailAnomali.every(a => a.status_fasih === 'Sudah Tindak Lanjut FASIH');
-    const adaSiapEksekusiMurni = subjek.detailAnomali.some(a => a.status_fasih !== 'Sudah Tindak Lanjut FASIH' && a.status_konfirmasi !== 'Belum Tindak Lanjut' && a.catatan_lapangan);
-    const adaYangBaruDisetujuiLokal = subjek.detailAnomali.some(a => idSelesaiLokal.includes(a.anomali_id));
+// ➕ TAMBAHKAN INI: Hitung subjek yang masih memiliki minimal 1 anomali belum FASIH
+const jumlahBelumFasih = semuaSubjekModal.filter(subjek =>
+  subjek.detailAnomali.some(a => a.status_fasih !== 'Sudah Tindak Lanjut FASIH')
+).length;
 
-    if (subjekFilterTab === 'siap_eksekusi') {
-      return (adaSiapEksekusiMurni && !isSelesaiSemuaMurni) || adaYangBaruDisetujuiLokal;
-    }
-    if (subjekFilterTab === 'selesai') return isSelesaiSemuaMurni;
-    return true;
-  });
+const jumlahSelesai = semuaSubjekModal.filter(subjek => subjek.detailAnomali.every(a => a.status_fasih === 'Sudah Tindak Lanjut FASIH')).length;
+const jumlahSemua = semuaSubjekModal.length;
+
+const subjekTersaring = semuaSubjekModal.filter(subjek => {
+  const isSelesaiSemuaMurni = subjek.detailAnomali.every(a => a.status_fasih === 'Sudah Tindak Lanjut FASIH');
+  const adaSiapEksekusiMurni = subjek.detailAnomali.some(a => a.status_fasih !== 'Sudah Tindak Lanjut FASIH' && a.status_konfirmasi !== 'Belum Tindak Lanjut' && a.catatan_lapangan);
+  const adaYangBaruDisetujuiLokal = subjek.detailAnomali.some(a => idSelesaiLokal.includes(a.anomali_id));
+
+  if (subjekFilterTab === 'siap_eksekusi') {
+    return (adaSiapEksekusiMurni && !isSelesaiSemuaMurni) || adaYangBaruDisetujuiLokal;
+  }
+  
+  // ➕ TAMBAHKAN INI: Tampilkan subjek jika ADA anomali yang belum selesai FASIH
+  if (subjekFilterTab === 'belum_fasih') {
+    return subjek.detailAnomali.some(a => a.status_fasih !== 'Sudah Tindak Lanjut FASIH');
+  }
+
+  if (subjekFilterTab === 'selesai') return isSelesaiSemuaMurni;
+  return true;
+});
 
   const subjekSiapTampil = [...subjekTersaring].sort((a, b) => {
     const aSiapAtauBaruSelesai = a.detailAnomali.some(an => (an.catatan_lapangan && an.status_fasih !== 'Sudah Tindak Lanjut FASIH') || idSelesaiLokal.includes(an.anomali_id));
@@ -1321,17 +1355,24 @@ export default function DashboardKantor() {
               <button onClick={handleTutupModal} className="bg-white/10 hover:bg-white/20 text-stone-300 hover:text-white font-black text-sm p-2 rounded-full w-9 h-9 flex items-center justify-center transition-all">✕</button>
             </div>
 
-            <div className="flex border-b border-stone-200 bg-stone-100 p-2 gap-2 sticky top-0 z-10">
-              <button type="button" onClick={() => setSubjekFilterTab('siap_eksekusi')} className={`flex items-center gap-2 px-4 py-2 text-xs font-bold rounded-lg transition-all ${subjekFilterTab === 'siap_eksekusi' ? 'bg-orange-600 text-white shadow-xs' : 'bg-white text-slate-600 hover:bg-stone-50 border border-stone-200'}`}>
-                ⚡ Siap Eksekusi FASIH <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${subjekFilterTab === 'siap_eksekusi' ? 'bg-orange-800 text-orange-100' : 'bg-stone-200 text-slate-600'}`}>{jumlahSiapEksekusi}</span>
-              </button>
-              <button type="button" onClick={() => setSubjekFilterTab('semua')} className={`flex items-center gap-2 px-4 py-2 text-xs font-bold rounded-lg transition-all ${subjekFilterTab === 'semua' ? 'bg-slate-800 text-white shadow-xs' : 'bg-white text-slate-600 hover:bg-stone-50 border border-stone-200'}`}>
-                📂 Semua Data <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${subjekFilterTab === 'semua' ? 'bg-slate-950 text-slate-200' : 'bg-stone-200 text-slate-600'}`}>{jumlahSemua}</span>
-              </button>
-              <button type="button" onClick={() => setSubjekFilterTab('selesai')} className={`flex items-center gap-2 px-4 py-2 text-xs font-bold rounded-lg transition-all ${subjekFilterTab === 'selesai' ? 'bg-emerald-600 text-white shadow-xs' : 'bg-white text-slate-600 hover:bg-stone-50 border border-stone-200'}`}>
-                ✔ Selesai FASIH <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${subjekFilterTab === 'selesai' ? 'bg-emerald-800 text-emerald-100' : 'bg-stone-200 text-slate-600'}`}>{jumlahSelesai}</span>
-              </button>
-            </div>
+<div className="flex border-b border-stone-200 bg-stone-100 p-2 gap-2 sticky top-0 z-10 flex-wrap">
+  <button type="button" onClick={() => setSubjekFilterTab('siap_eksekusi')} className={`flex items-center gap-2 px-4 py-2 text-xs font-bold rounded-lg transition-all ${subjekFilterTab === 'siap_eksekusi' ? 'bg-orange-600 text-white shadow-xs' : 'bg-white text-slate-600 hover:bg-stone-50 border border-stone-200'}`}>
+    ⚡ Siap Eksekusi FASIH <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${subjekFilterTab === 'siap_eksekusi' ? 'bg-orange-800 text-orange-100' : 'bg-stone-200 text-slate-600'}`}>{jumlahSiapEksekusi}</span>
+  </button>
+
+  {/* ➕ TAMBAHKAN TOMBOL TAB BARU DI SINI */}
+  <button type="button" onClick={() => setSubjekFilterTab('belum_fasih')} className={`flex items-center gap-2 px-4 py-2 text-xs font-bold rounded-lg transition-all ${subjekFilterTab === 'belum_fasih' ? 'bg-amber-600 text-white shadow-xs' : 'bg-white text-slate-600 hover:bg-stone-50 border border-stone-200'}`}>
+    ⏳ Belum FASIH <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${subjekFilterTab === 'belum_fasih' ? 'bg-amber-800 text-amber-100' : 'bg-stone-200 text-slate-600'}`}>{jumlahBelumFasih}</span>
+  </button>
+
+  <button type="button" onClick={() => setSubjekFilterTab('semua')} className={`flex items-center gap-2 px-4 py-2 text-xs font-bold rounded-lg transition-all ${subjekFilterTab === 'semua' ? 'bg-slate-800 text-white shadow-xs' : 'bg-white text-slate-600 hover:bg-stone-50 border border-stone-200'}`}>
+    📂 Semua Data <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${subjekFilterTab === 'semua' ? 'bg-slate-950 text-slate-200' : 'bg-stone-200 text-slate-600'}`}>{jumlahSemua}</span>
+  </button>
+
+  <button type="button" onClick={() => setSubjekFilterTab('selesai')} className={`flex items-center gap-2 px-4 py-2 text-xs font-bold rounded-lg transition-all ${subjekFilterTab === 'selesai' ? 'bg-emerald-600 text-white shadow-xs' : 'bg-white text-slate-600 hover:bg-stone-50 border border-stone-200'}`}>
+    ✔ Selesai FASIH <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${subjekFilterTab === 'selesai' ? 'bg-emerald-800 text-emerald-100' : 'bg-stone-200 text-slate-600'}`}>{jumlahSelesai}</span>
+  </button>
+</div>
 
             <div className="p-6 overflow-y-auto bg-stone-50/50 space-y-4 flex-1">
               {loadingModal ? (
@@ -1340,9 +1381,13 @@ export default function DashboardKantor() {
                 </div>
               ) : subjekSiapTampil.length === 0 ? (
                 <div className="text-center py-16 bg-white rounded-xl border border-dashed border-stone-300">
-                  <p className="text-stone-400 font-bold text-sm">
-                    {subjekFilterTab === 'siap_eksekusi' ? '🎉 Luar biasa! Tidak ada antrean data yang siap dieksekusi di sini.' : 'Tidak ada data sampel yang sesuai dengan kriteria filter.'}
-                  </p>
+<p className="text-stone-400 font-bold text-sm">
+  {subjekFilterTab === 'siap_eksekusi' 
+    ? '🎉 Luar biasa! Tidak ada antrean data yang siap dieksekusi di sini.' 
+    : subjekFilterTab === 'belum_fasih'
+    ? '🎉 Semua data subjek sudah selesai ditindaklanjuti di FASIH!'
+    : 'Tidak ada data sampel yang sesuai dengan kriteria filter.'}
+</p>
                 </div>
               ) : (
                 subjekSiapTampil.map(subjek => (
@@ -1487,7 +1532,11 @@ export default function DashboardKantor() {
                                 <button 
                                   type="button" 
                                   disabled={updatingId === anomali.anomali_id} 
-                                  onClick={() => setKonfirmasiId(anomali.anomali_id)} 
+                                  onClick={() => {
+  setKonfirmasiId(anomali.anomali_id);
+  // ➕ Sinkronkan isi input modal konfirmasi dengan catatan pegawai yang sudah ada
+  setCatatanPegawaiInput(anomali.catatan_pegawai || '');
+}}
                                   className="bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold px-3 py-1.5 rounded-lg text-xs shadow-md transition-all active:scale-95"
                                 >
                                   {updatingId === anomali.anomali_id ? 'Proses...' : '✔ Sudah FASIH'}
@@ -1519,26 +1568,40 @@ export default function DashboardKantor() {
               <h4 className="text-xs font-black uppercase tracking-wider text-slate-800">Verifikasi & Penyesuaian Keterangan</h4>
             </div>
             
-            <div className="space-y-3 text-xs leading-relaxed text-slate-650 font-medium">
-              <p>Apakah Anda sudah memeriksa aplikasi pusat FASIH dan setuju menandai data ini sebagai <strong className="text-emerald-700 font-bold">"Sudah Tindak Lanjut FASIH"</strong>?</p>
-              
-              <div className="space-y-1 bg-stone-50 p-3 rounded-lg border border-stone-200">
-                <label className="text-[10px] font-black text-slate-600 block uppercase tracking-wide">
-                  🖋️ Penyesuaian Keterangan / Catatan Pegawai (Opsional):
-                </label>
-                <textarea
-                  rows="3"
-                  value={catatanPegawaiInput}
-                  onChange={(e) => setCatatanPegawaiInput(e.target.value)}
-                  placeholder="Contoh: Dokumen sudah diperbaiki di FASIH, jumlah muatan disesuaikan..."
-                  className="w-full bg-white border border-stone-300 rounded-md p-2 text-xs text-slate-800 focus:outline-amber-600 font-sans leading-normal placeholder-stone-400"
-                />
-              </div>
+{/* DI DALAM MODAL KONFIRMASI (konfirmasiId) */}
+<div className="space-y-3 text-xs leading-relaxed text-slate-650 font-medium">
+  <p>Apakah Anda sudah memeriksa aplikasi FASIH dan setuju menandai data ini sebagai <strong className="text-emerald-700 font-bold">"Sudah Tindak Lanjut FASIH"</strong>?</p>
+  
+  {/* Indikator Status Keterangan Lapangan */}
+  {(() => {
+    const targetSubjek = modalDetailObj?.daftarSubjek.find(s => s.detailAnomali.some(a => a.anomali_id === konfirmasiId));
+    const targetAnomali = targetSubjek?.detailAnomali.find(a => a.anomali_id === konfirmasiId);
+    const adaCatatanLapangan = !!targetAnomali?.catatan_lapangan?.trim();
 
-              <blockquote className="bg-orange-50 border-l-2 border-orange-400 p-2 rounded text-[11px] font-semibold text-orange-950 italic">
-                Penting: Pastikan isian entri data pada sistem FASIH benar-benar telah diselaraskan sebelum disubmit.
-              </blockquote>
-            </div>
+    return (
+      <div className={`p-2 rounded text-[11px] font-semibold border ${adaCatatanLapangan ? 'bg-emerald-50 border-emerald-200 text-emerald-800' : 'bg-rose-50 border-rose-200 text-rose-800'}`}>
+        {adaCatatanLapangan ? (
+          <span>🟢 Catatan petugas lapangan terisi.</span>
+        ) : (
+          <span>🔴 Catatan petugas lapangan **KOSONG**. Anda wajib mengisi penyesuaian keterangan di bawah ini!</span>
+        )}
+      </div>
+    );
+  })()}
+
+  <div className="space-y-1 bg-stone-50 p-3 rounded-lg border border-stone-200">
+    <label className="text-[10px] font-black text-slate-600 block uppercase tracking-wide">
+      🖋️ Penyesuaian Keterangan / Catatan Pegawai:
+    </label>
+    <textarea
+      rows="3"
+      value={catatanPegawaiInput}
+      onChange={(e) => setCatatanPegawaiInput(e.target.value)}
+      placeholder="Wajib diisi jika catatan petugas lapangan di atas kosong..."
+      className="w-full bg-white border border-stone-300 rounded-md p-2 text-xs text-slate-800 focus:outline-amber-600 font-sans leading-normal placeholder-stone-400"
+    />
+  </div>
+</div>
 
             <div className="flex justify-end gap-2 pt-2 border-t border-stone-100 text-xs font-bold">
               <button
