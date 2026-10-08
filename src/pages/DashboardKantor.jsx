@@ -19,7 +19,8 @@ export default function DashboardKantor() {
     const opsi = { day: '2-digit', month: 'long', year: 'numeric' };
     return new Date(stringTanggal).toLocaleDateString('id-ID', opsi);
   };
-
+  // State untuk progress bar loading batch
+const [loadingProgress, setLoadingProgress] = useState({ current: 0, total: 0 });
   // Data State
   const [masterAnomali, setMasterAnomali] = useState([]);
   const [treeData, setTreeData] = useState([]);
@@ -96,31 +97,63 @@ export default function DashboardKantor() {
     }
   };
 
-  const fetchDataMonitoringKantor = async () => {
-    setLoading(true);
-    try {
-      const { data, error } = await supabaseData
+const fetchDataMonitoringKantor = async () => {
+  setLoading(true);
+  setLoadingProgress({ current: 0, total: 0 });
+
+  try {
+    const BATCH_SIZE = 20000; // Ukuran data per batch/request
+    let offset = 0;
+    let semuaData = [];
+    let totalBaris = 0;
+
+    // 1. Request Batch Pertama + Ambil Total Count Data
+    const { data: firstBatch, error: firstErr, count } = await supabaseData
+      .from('view_rekap_agregat_kantor')
+      .select('*', { count: 'exact' })
+      .range(0, BATCH_SIZE - 1);
+
+    if (firstErr) throw firstErr;
+
+    semuaData = [...(firstBatch || [])];
+    totalBaris = count || semuaData.length;
+    setLoadingProgress({ current: semuaData.length, total: totalBaris });
+
+    // 2. Jika Total Data Lebih Banyak dari BATCH_SIZE, Lakukan Looping Ambil Sisanya
+    offset += BATCH_SIZE;
+    while (offset < totalBaris) {
+      const { data: nextBatch, error: nextErr } = await supabaseData
         .from('view_rekap_agregat_kantor')
-        .select('*');
+        .select('*')
+        .range(offset, offset + BATCH_SIZE - 1);
 
-      if (error) throw error;
+      if (nextErr) throw nextErr;
 
-      const dbRows = data || [];
-      setRawViewData(dbRows);
+      if (nextBatch && nextBatch.length > 0) {
+        semuaData = [...semuaData, ...nextBatch];
+        setLoadingProgress({ current: semuaData.length, total: totalBaris });
+      }
 
-      const daftarTanggal = [...new Set(dbRows.map(item => item.tanggal_snapshot))]
-        .filter(Boolean)
-        .sort((a, b) => b.localeCompare(a));
-
-      setAvailableSnapshots(daftarTanggal);
-
-      filterDanProsesDataLokal(dbRows, mainMasalahTab, selectedSnapshot, daftarTanggal);
-    } catch (err) {
-      console.error(err.message);
-    } finally {
-      setLoading(false);
+      offset += BATCH_SIZE;
     }
-  };
+
+    // 3. Olah Data yang Sudah Terkumpul Lengkap
+    setRawViewData(semuaData);
+
+    const daftarTanggal = [...new Set(semuaData.map(item => item.tanggal_snapshot))]
+      .filter(Boolean)
+      .sort((a, b) => b.localeCompare(a));
+
+    setAvailableSnapshots(daftarTanggal);
+    filterDanProsesDataLokal(semuaData, mainMasalahTab, selectedSnapshot, daftarTanggal);
+
+  } catch (err) {
+    console.error('Gagal memuat data monitoring:', err.message);
+    alert('Gagal memuat data: ' + err.message);
+  } finally {
+    setLoading(false);
+  }
+};
 
   const filterDanProsesDataLokal = (semuaData, tabAktif, snapshotDipilih, daftarTglSnap = availableSnapshots) => {
     let dataTerfilter = semuaData.filter(item => 
@@ -776,13 +809,44 @@ if (subjekFilterTab === 'belum_fasih') {
     return true;
   });
 
-  if (loading && masterAnomali.length === 0) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-stone-50 text-slate-500 font-sans text-xs font-bold">
-        ⏳ Memuat Pengaturan Aturan & Data Agregat Kantor...
+if (loading && rawViewData.length === 0) {
+  const persenLoading = loadingProgress.total > 0 
+    ? Math.min(100, Math.round((loadingProgress.current / loadingProgress.total) * 100))
+    : 0;
+
+  return (
+    <div className="min-h-screen flex flex-col items-center justify-center bg-stone-50 p-6 font-sans">
+      <div className="bg-white p-6 rounded-2xl border border-stone-200 shadow-xl max-w-sm w-full space-y-4 text-center">
+        <div className="w-10 h-10 border-4 border-amber-700/20 border-t-amber-700 rounded-full animate-spin mx-auto"></div>
+        
+        <div className="space-y-1">
+          <h3 className="text-xs font-black uppercase tracking-wider text-slate-800">
+            Memuat Data Anomali
+          </h3>
+          <p className="text-[11px] font-mono text-stone-500 font-bold">
+            {loadingProgress.total > 0 ? (
+              <>Mengambil <span className="text-amber-800 font-black">{loadingProgress.current.toLocaleString('id-ID')}</span> dari <span className="text-slate-800 font-black">{loadingProgress.total.toLocaleString('id-ID')}</span> baris data...</>
+            ) : (
+              'Menghubungkan ke server Supabase...'
+            )}
+          </p>
+        </div>
+
+        {/* Dynamic Loading Bar */}
+        <div className="w-full bg-stone-100 rounded-full h-3 overflow-hidden p-[2px] border border-stone-200 shadow-inner">
+          <div 
+            className="bg-gradient-to-r from-amber-600 to-orange-600 h-full rounded-full transition-all duration-300 ease-out"
+            style={{ width: `${persenLoading}%` }}
+          ></div>
+        </div>
+
+        <span className="text-[10px] font-mono font-bold text-amber-900 bg-amber-50 px-2.5 py-1 rounded-full inline-block border border-amber-200/60">
+          Progres: {persenLoading}%
+        </span>
       </div>
-    );
-  }
+    </div>
+  );
+}
 
   return (
     <div className="min-h-screen bg-stone-50 text-slate-700 font-sans antialiased">
@@ -910,7 +974,17 @@ if (subjekFilterTab === 'belum_fasih') {
                 <span>📁 Impor Excel</span>
                 <input type="file" accept=".xlsx, .xls" onChange={handlePilihFileExcel} className="hidden" disabled={uploading} />
               </label>
-              <button onClick={fetchDataMonitoringKantor} className="bg-white border text-xs text-amber-800 font-bold px-3 py-1.5 rounded-lg hover:bg-stone-50 shadow-3xs">🔄 Segarkan Progres</button>
+              <button 
+  type="button"
+  disabled={loading}
+  onClick={fetchDataMonitoringKantor} 
+  className={`bg-white border text-xs text-amber-800 font-bold px-3 py-1.5 rounded-lg hover:bg-stone-50 shadow-3xs flex items-center gap-1.5 ${
+    loading ? 'opacity-60 cursor-not-allowed' : ''
+  }`}
+>
+  <span className={loading ? 'animate-spin inline-block' : ''}>🔄</span>
+  <span>{loading ? 'Memuat Data...' : 'Segarkan Progres'}</span>
+</button>
             </div>
           </div>
 
