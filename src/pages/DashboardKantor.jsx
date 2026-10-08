@@ -19,8 +19,10 @@ export default function DashboardKantor() {
     const opsi = { day: '2-digit', month: 'long', year: 'numeric' };
     return new Date(stringTanggal).toLocaleDateString('id-ID', opsi);
   };
+
   // State untuk progress bar loading batch
-const [loadingProgress, setLoadingProgress] = useState({ current: 0, total: 0 });
+  const [loadingProgress, setLoadingProgress] = useState({ current: 0, total: 0 });
+
   // Data State
   const [masterAnomali, setMasterAnomali] = useState([]);
   const [treeData, setTreeData] = useState([]);
@@ -37,6 +39,7 @@ const [loadingProgress, setLoadingProgress] = useState({ current: 0, total: 0 })
   const [expandedKec, setExpandedKec] = useState({});
   const [expandedSnap, setExpandedSnap] = useState({});
   const [modalDetailObj, setModalDetailObj] = useState(null);
+  const [modalKategoriObj, setModalKategoriObj] = useState(null); // State Modal Rincian Kategori
   const [updatingId, setUpdatingId] = useState(null);
   const [loadingModal, setLoadingModal] = useState(false);
   const [konfirmasiId, setKonfirmasiId] = useState(null);
@@ -76,7 +79,12 @@ const [loadingProgress, setLoadingProgress] = useState({ current: 0, total: 0 })
 
   // KPI Rapor Ringkasan Global
   const [summaryMetrics, setSummaryMetrics] = useState({
-    totalAnomali: 0, sudahPcl: 0, belumPcl: 0, sudahFasih: 0, belumFasih: 0
+    totalAnomali: 0, 
+    sudahPcl: 0, 
+    belumPcl: 0, 
+    sudahFasih: 0, 
+    belumFasih: 0,
+    perKategori: {} // Menampung rekap per kategori_anomali
   });
 
   const getInfoAnomali = (kode, tipe = 'deskripsi') => {
@@ -97,63 +105,60 @@ const [loadingProgress, setLoadingProgress] = useState({ current: 0, total: 0 })
     }
   };
 
-const fetchDataMonitoringKantor = async () => {
-  setLoading(true);
-  setLoadingProgress({ current: 0, total: 0 });
+  const fetchDataMonitoringKantor = async () => {
+    setLoading(true);
+    setLoadingProgress({ current: 0, total: 0 });
 
-  try {
-    const BATCH_SIZE = 20000; // Ukuran data per batch/request
-    let offset = 0;
-    let semuaData = [];
-    let totalBaris = 0;
+    try {
+      const BATCH_SIZE = 10000;
+      let offset = 0;
+      let semuaData = [];
+      let totalBaris = 0;
 
-    // 1. Request Batch Pertama + Ambil Total Count Data
-    const { data: firstBatch, error: firstErr, count } = await supabaseData
-      .from('view_rekap_agregat_kantor')
-      .select('*', { count: 'exact' })
-      .range(0, BATCH_SIZE - 1);
-
-    if (firstErr) throw firstErr;
-
-    semuaData = [...(firstBatch || [])];
-    totalBaris = count || semuaData.length;
-    setLoadingProgress({ current: semuaData.length, total: totalBaris });
-
-    // 2. Jika Total Data Lebih Banyak dari BATCH_SIZE, Lakukan Looping Ambil Sisanya
-    offset += BATCH_SIZE;
-    while (offset < totalBaris) {
-      const { data: nextBatch, error: nextErr } = await supabaseData
+      const { data: firstBatch, error: firstErr, count } = await supabaseData
         .from('view_rekap_agregat_kantor')
-        .select('*')
-        .range(offset, offset + BATCH_SIZE - 1);
+        .select('*', { count: 'exact' })
+        .range(0, BATCH_SIZE - 1);
 
-      if (nextErr) throw nextErr;
+      if (firstErr) throw firstErr;
 
-      if (nextBatch && nextBatch.length > 0) {
-        semuaData = [...semuaData, ...nextBatch];
-        setLoadingProgress({ current: semuaData.length, total: totalBaris });
-      }
+      semuaData = [...(firstBatch || [])];
+      totalBaris = count || semuaData.length;
+      setLoadingProgress({ current: semuaData.length, total: totalBaris });
 
       offset += BATCH_SIZE;
+      while (offset < totalBaris) {
+        const { data: nextBatch, error: nextErr } = await supabaseData
+          .from('view_rekap_agregat_kantor')
+          .select('*')
+          .range(offset, offset + BATCH_SIZE - 1);
+
+        if (nextErr) throw nextErr;
+
+        if (nextBatch && nextBatch.length > 0) {
+          semuaData = [...semuaData, ...nextBatch];
+          setLoadingProgress({ current: semuaData.length, total: totalBaris });
+        }
+
+        offset += BATCH_SIZE;
+      }
+
+      setRawViewData(semuaData);
+
+      const daftarTanggal = [...new Set(semuaData.map(item => item.tanggal_snapshot))]
+        .filter(Boolean)
+        .sort((a, b) => b.localeCompare(a));
+
+      setAvailableSnapshots(daftarTanggal);
+      filterDanProsesDataLokal(semuaData, mainMasalahTab, selectedSnapshot, daftarTanggal);
+
+    } catch (err) {
+      console.error('Gagal memuat data monitoring:', err.message);
+      alert('Gagal memuat data: ' + err.message);
+    } finally {
+      setLoading(false);
     }
-
-    // 3. Olah Data yang Sudah Terkumpul Lengkap
-    setRawViewData(semuaData);
-
-    const daftarTanggal = [...new Set(semuaData.map(item => item.tanggal_snapshot))]
-      .filter(Boolean)
-      .sort((a, b) => b.localeCompare(a));
-
-    setAvailableSnapshots(daftarTanggal);
-    filterDanProsesDataLokal(semuaData, mainMasalahTab, selectedSnapshot, daftarTanggal);
-
-  } catch (err) {
-    console.error('Gagal memuat data monitoring:', err.message);
-    alert('Gagal memuat data: ' + err.message);
-  } finally {
-    setLoading(false);
-  }
-};
+  };
 
   const filterDanProsesDataLokal = (semuaData, tabAktif, snapshotDipilih, daftarTglSnap = availableSnapshots) => {
     let dataTerfilter = semuaData.filter(item => 
@@ -185,24 +190,59 @@ const fetchDataMonitoringKantor = async () => {
     siapkanDataAwal();
   }, []);
 
-  const hitungMetrikGlobal = (data) => {
-    let total = 0, sudahPcl = 0, sudahFasih = 0, belumFasih = 0;
+ const hitungMetrikGlobal = (data) => {
+  let total = 0, sudahPcl = 0, sudahFasih = 0, belumFasih = 0;
+  const rekapKategori = {};
 
-    data.forEach(d => {
-      total += Number(d.total_rows || 0);
-      sudahPcl += Number(d.sudah_pcl || 0);
-      sudahFasih += Number(d.sudah_fasih || 0);
-      belumFasih += Number(d.belum_fasih || 0);
-    });
+  data.forEach(d => {
+    const totalRow = Number(d.total_rows || 0);
+    const sPcl = Number(d.sudah_pcl || 0);
+    const sFasih = Number(d.sudah_fasih || 0);
+    
+    // hitung total belum FASIH (Total minus Sudah FASIH)
+    const bFasihTotal = totalRow - sFasih;
 
-    setSummaryMetrics({
-      totalAnomali: total, 
-      sudahPcl: sudahPcl, 
-      belumPcl: total - sudahPcl, 
-      sudahFasih: sudahFasih, 
-      belumFasih: belumFasih
-    });
-  };
+    total += totalRow;
+    sudahPcl += sPcl;
+    sudahFasih += sFasih;
+    belumFasih += bFasihTotal; // 💡 Gunakan bFasihTotal
+
+    const aturanCocok = masterAnomali.find(a => a.kode === d.kode_anomali);
+    const kat = d.kategori_anomali || aturanCocok?.kategori || 'LAINNYA';
+
+    if (!rekapKategori[kat]) {
+      rekapKategori[kat] = { total: 0, sudahFasih: 0, belumFasih: 0, daftarAnomaliMap: {} };
+    }
+    rekapKategori[kat].total += totalRow;
+    rekapKategori[kat].sudahFasih += sFasih;
+    rekapKategori[kat].belumFasih += bFasihTotal; // 💡 Simpan total belum FASIH per kategori
+
+    const kdAnomali = d.kode_anomali || 'ERR';
+    if (!rekapKategori[kat].daftarAnomaliMap[kdAnomali]) {
+      rekapKategori[kat].daftarAnomaliMap[kdAnomali] = {
+        kode: kdAnomali,
+        total: 0,
+        sudahFasih: 0,
+        belumFasih: 0,
+        kdkec: d.kdkec,
+        pml_email: d.pml_email,
+        tanggal_snapshot: d.tanggal_snapshot
+      };
+    }
+    rekapKategori[kat].daftarAnomaliMap[kdAnomali].total += totalRow;
+    rekapKategori[kat].daftarAnomaliMap[kdAnomali].sudahFasih += sFasih;
+    rekapKategori[kat].daftarAnomaliMap[kdAnomali].belumFasih += bFasihTotal; // 💡 Simpan per item anomali
+  });
+
+  setSummaryMetrics({
+    totalAnomali: total, 
+    sudahPcl: sudahPcl, 
+    belumPcl: total - sudahPcl, 
+    sudahFasih: sudahFasih, 
+    belumFasih: belumFasih,
+    perKategori: rekapKategori
+  });
+};
 
   const prosesStrukturAgregat = (data) => {
     const kecMap = {};
@@ -313,7 +353,6 @@ const fetchDataMonitoringKantor = async () => {
     e.target.value = '';
   };
 
-  // PROSES DATA: PISAH DENGAN FRASA 'ANOMALI' + REKAP UNIK
   const handleProsesReviewBarisData = () => {
     if (!columnMap.assignment_id || !columnMap.nama_subjek || !columnMap.nama_anomali) {
       alert('Mohon petakan kolom minimal untuk ID Assignment, Nama Subjek, dan Nama Anomali!');
@@ -326,7 +365,6 @@ const fetchDataMonitoringKantor = async () => {
     rawExcelData.forEach((row, rowIndex) => {
       const rawAnomaliTeks = String(row[columnMap.nama_anomali] || '').trim();
 
-      // Split presisi berdasarkan kata "Anomali" (Case-Insensitive)
       const daftarAnomaliTeks = rawAnomaliTeks
         ? rawAnomaliTeks.split(/(?:,|\n|;)?\s*(?=Anomali)/i).filter(Boolean)
         : [''];
@@ -365,7 +403,6 @@ const fetchDataMonitoringKantor = async () => {
 
     setMappedRowItems(itemHasilOlahan);
 
-    // REKAP TEKS UNIK UNTUK MODAL REVIEW
     const rekapMap = {};
     itemHasilOlahan.forEach(item => {
       const keyTeks = item.teks_anomali_asli;
@@ -386,14 +423,11 @@ const fetchDataMonitoringKantor = async () => {
     setUploadProgressStatus('review_rows'); 
   };
 
-  // UBAH KODE REKAP -> OTOMATIS UPDATE SEMUA BARIS DERIVATIFNYA
   const handleUbahKodeRekap = (teksAnomaliTarget, kodeBaru) => {
-    // 1. Update di Rekap Unik
     setGroupedAnomali(prev => prev.map(item => 
       item.teks_anomali_asli === teksAnomaliTarget ? { ...item, kode_anomali: kodeBaru } : item
     ));
 
-    // 2. Cascade Update ke Seluruh Baris Data Individu
     setMappedRowItems(prev => prev.map(item => 
       item.teks_anomali_asli === teksAnomaliTarget ? { ...item, kode_anomali: kodeBaru } : item
     ));
@@ -555,6 +589,17 @@ const fetchDataMonitoringKantor = async () => {
     }
   };
 
+  const handleBukaModalKategori = (namaKategori, dataKategori) => {
+    const listAnomali = Object.values(dataKategori.daftarAnomaliMap || {}).sort((a, b) => a.kode.localeCompare(b.kode));
+    setModalKategoriObj({
+      namaKategori: namaKategori,
+      total: dataKategori.total,
+      sudahFasih: dataKategori.sudahFasih,
+      belumFasih: dataKategori.belumFasih,
+      listAnomali: listAnomali
+    });
+  };
+
   const handleBukaModalDetail = async (itemObj, namaKec) => {
     setSubjekFilterTab('siap_eksekusi');
     setLoadingModal(true);
@@ -562,19 +607,22 @@ const fetchDataMonitoringKantor = async () => {
 
     setModalDetailObj({ 
       ...itemObj, 
-      namaKec: namaKec, 
+      namaKec: namaKec || 'SEMUA KECAMATAN', 
       kodePemicu: itemObj.kode, 
       tglSnapshot: itemObj.tanggal_snapshot, 
       daftarSubjek: [] 
     });
 
     try {
-      const { data: sampelTarget, error } = await supabaseData
+      let query = supabaseData
         .from('view_monitoring_anomali')
-        .select('anomali_id, assignment_id, nama_subjek, nmdesa, nmsls, nama_pcl, pcl_email, link_fasih, kode_anomali, status_konfirmasi, catatan_lapangan, status_fasih, catatan_pegawai')
-        .eq('kdkec', itemObj.kdkec)
-        .eq('pml_email', itemObj.pml_email)
-        .eq('tanggal_snapshot', itemObj.tanggal_snapshot);
+        .select('anomali_id, assignment_id, nama_subjek, nmdesa, nmsls, nama_pcl, pcl_email, link_fasih, kode_anomali, status_konfirmasi, catatan_lapangan, status_fasih, catatan_pegawai');
+
+      if (itemObj.kdkec) query = query.eq('kdkec', itemObj.kdkec);
+      if (itemObj.pml_email) query = query.eq('pml_email', itemObj.pml_email);
+      if (itemObj.tanggal_snapshot) query = query.eq('tanggal_snapshot', itemObj.tanggal_snapshot);
+
+      const { data: sampelTarget, error } = await query;
 
       if (error) throw error;
 
@@ -620,134 +668,130 @@ const fetchDataMonitoringKantor = async () => {
     setIdSelesaiLokal([]);
   };
 
-const handleSimpanFasihTunggal = async (anomaliId) => {
-  // 1. Cari data anomali target yang sedang dikonfirmasi
-  const targetSubjek = modalDetailObj?.daftarSubjek.find(s => 
-    s.detailAnomali.some(a => a.anomali_id === anomaliId)
-  );
-  const detailAnomaliTarget = targetSubjek?.detailAnomali.find(a => a.anomali_id === anomaliId);
+  const handleSimpanFasihTunggal = async (anomaliId) => {
+    const targetSubjek = modalDetailObj?.daftarSubjek.find(s => 
+      s.detailAnomali.some(a => a.anomali_id === anomaliId)
+    );
+    const detailAnomaliTarget = targetSubjek?.detailAnomali.find(a => a.anomali_id === anomaliId);
 
-  const catatanPetugas = detailAnomaliTarget?.catatan_lapangan?.trim() || '';
-  const penyesuaianPegawai = catatanPegawaiInput.trim();
+    const catatanPetugas = detailAnomaliTarget?.catatan_lapangan?.trim() || '';
+    const penyesuaianPegawai = catatanPegawaiInput.trim();
 
-  // 2. VALIDASI: Cek apakah KEDUA keterangan kosong
-  if (!catatanPetugas && !penyesuaianPegawai) {
-    alert('⚠️ Mohon berikan keterangan terlebih dahulu! Minimal salah satu antara Catatan Petugas Lapangan atau Penyesuaian Keterangan Pegawai harus terisi.');
-    return; // Hentikan eksekusi jika dua-duanya kosong
-  }
+    if (!catatanPetugas && !penyesuaianPegawai) {
+      alert('⚠️ Mohon berikan keterangan terlebih dahulu! Minimal salah satu antara Catatan Petugas Lapangan atau Penyesuaian Keterangan Pegawai harus terisi.');
+      return;
+    }
 
-  setUpdatingId(anomaliId);
+    setUpdatingId(anomaliId);
 
-  try {
-    if (!targetSubjek || !detailAnomaliTarget) throw new Error("Data lokal tidak sinkron");
+    try {
+      if (!targetSubjek || !detailAnomaliTarget) throw new Error("Data lokal tidak sinkron");
 
-    const assignIdIdem = targetSubjek.assignment_id;
-    const kodeAnomaliIdem = detailAnomaliTarget.kode;
+      const assignIdIdem = targetSubjek.assignment_id;
+      const kodeAnomaliIdem = detailAnomaliTarget.kode;
 
-    const { data: daftarKembar, error: errCari } = await supabaseData
-      .from('view_monitoring_anomali')
-      .select('anomali_id')
-      .eq('assignment_id', assignIdIdem)
-      .eq('kode_anomali', kodeAnomaliIdem);
+      const { data: daftarKembar, error: errCari } = await supabaseData
+        .from('view_monitoring_anomali')
+        .select('anomali_id')
+        .eq('assignment_id', assignIdIdem)
+        .eq('kode_anomali', kodeAnomaliIdem);
 
-    if (errCari) throw errCari;
+      if (errCari) throw errCari;
 
-    const listPayload = daftarKembar.map(item => ({
-      anomali_id: item.anomali_id,
-      status_fasih: 'Sudah Tindak Lanjut FASIH',
-      dieksekusi_oleh_email: profilUser?.email,
-      waktu_eksekusi_fasih: new Date().toISOString(),
+      const listPayload = daftarKembar.map(item => ({
+        anomali_id: item.anomali_id,
+        status_fasih: 'Sudah Tindak Lanjut FASIH',
+        dieksekusi_oleh_email: profilUser?.email,
+        waktu_eksekusi_fasih: new Date().toISOString(),
 
-      catatan_pegawai: penyesuaianPegawai || null,
-      status_monitoring: 'Sudah Diperiksa',
-      diperiksa_oleh_email: profilUser?.email,
-      tanggal_periksa: new Date().toISOString()
-    }));
+        catatan_pegawai: penyesuaianPegawai || null,
+        status_monitoring: 'Sudah Diperiksa',
+        diperiksa_oleh_email: profilUser?.email,
+        tanggal_periksa: new Date().toISOString()
+      }));
 
-    const { error: errUpsert } = await supabaseData
-      .from('tindak_lanjut_anomali')
-      .upsert(listPayload, { onConflict: 'anomali_id' });
+      const { error: errUpsert } = await supabaseData
+        .from('tindak_lanjut_anomali')
+        .upsert(listPayload, { onConflict: 'anomali_id' });
 
-    if (errUpsert) throw errUpsert;
+      if (errUpsert) throw errUpsert;
 
-    setIdSelesaiLokal(prev => [...prev, anomaliId]);
+      setIdSelesaiLokal(prev => [...prev, anomaliId]);
 
-    setKonfirmasiId(null);
-    setCatatanPegawaiInput('');
+      setKonfirmasiId(null);
+      setCatatanPegawaiInput('');
 
-    setModalDetailObj(prev => {
-      if (!prev) return null;
-      return {
-        ...prev,
-        daftarSubjek: prev.daftarSubjek.map(subjek => {
-          if (subjek.assignment_id === assignIdIdem) {
-            return {
-              ...subjek,
-              detailAnomali: subjek.detailAnomali.map(anomali => {
-                if (anomali.kode === kodeAnomaliIdem) {
-                  return { 
-                    ...anomali, 
-                    status_fasih: 'Sudah Tindak Lanjut FASIH',
-                    catatan_pegawai: penyesuaianPegawai || null
-                  };
-                }
-                return anomali;
-              })
-            };
-          }
-          return subjek;
-        })
-      };
-    });
-
-    setRawViewData(prev => prev.map(row => {
-      const kecocokan = daftarKembar.some(dk => dk.anomali_id === row.anomali_id || (row.assignment_id === assignIdIdem && row.kode_anomali === kodeAnomaliIdem));
-      if (kecocokan) {
-        return { 
-          ...row, 
-          status_fasih: 'Sudah Tindak Lanjut FASIH', 
-          status_konfirmasi: row.status_konfirmasi === 'Belum Tindak Lanjut' ? 'Sesuai Kondisi Lapangan' : row.status_konfirmasi 
+      setModalDetailObj(prev => {
+        if (!prev) return null;
+        return {
+          ...prev,
+          daftarSubjek: prev.daftarSubjek.map(subjek => {
+            if (subjek.assignment_id === assignIdIdem) {
+              return {
+                ...subjek,
+                detailAnomali: subjek.detailAnomali.map(anomali => {
+                  if (anomali.kode === kodeAnomaliIdem) {
+                    return { 
+                      ...anomali, 
+                      status_fasih: 'Sudah Tindak Lanjut FASIH',
+                      catatan_pegawai: penyesuaianPegawai || null
+                    };
+                  }
+                  return anomali;
+                })
+              };
+            }
+            return subjek;
+          })
         };
-      }
-      return row;
-    }));
+      });
 
-  } catch (err) {
-    alert('Gagal memperbarui status: ' + err.message);
-  } finally {
-    setUpdatingId(null);
-  }
-};
+      setRawViewData(prev => prev.map(row => {
+        const kecocokan = daftarKembar.some(dk => dk.anomali_id === row.anomali_id || (row.assignment_id === assignIdIdem && row.kode_anomali === kodeAnomaliIdem));
+        if (kecocokan) {
+          return { 
+            ...row, 
+            status_fasih: 'Sudah Tindak Lanjut FASIH', 
+            status_konfirmasi: row.status_konfirmasi === 'Belum Tindak Lanjut' ? 'Sesuai Kondisi Lapangan' : row.status_konfirmasi 
+          };
+        }
+        return row;
+      }));
 
-const handleSaveCatatan = async (anomaliId) => {
-  try {
-    const { error } = await supabaseData
-      .from('tindak_lanjut_anomali')
-      .update({ catatan_pegawai: editValue })
-      .eq('anomali_id', anomaliId);
+    } catch (err) {
+      alert('Gagal memperbarui status: ' + err.message);
+    } finally {
+      setUpdatingId(null);
+    }
+  };
 
-    if (error) throw error;
+  const handleSaveCatatan = async (anomaliId) => {
+    try {
+      const { error } = await supabaseData
+        .from('tindak_lanjut_anomali')
+        .update({ catatan_pegawai: editValue })
+        .eq('anomali_id', anomaliId);
 
-    // ➕ Update state modal secara lokal (UI langsung berubah seketika)
-    setModalDetailObj(prev => ({
-      ...prev,
-      daftarSubjek: prev.daftarSubjek.map(s => ({
-        ...s,
-        detailAnomali: s.detailAnomali.map(a => 
-          a.anomali_id === anomaliId ? { ...a, catatan_pegawai: editValue } : a
-        )
-      }))
-    }));
+      if (error) throw error;
 
-    // ➕ Sinkronkan juga ke input modal konfirmasi jika sedang aktif
-    setCatatanPegawaiInput(editValue);
+      setModalDetailObj(prev => ({
+        ...prev,
+        daftarSubjek: prev.daftarSubjek.map(s => ({
+          ...s,
+          detailAnomali: s.detailAnomali.map(a => 
+            a.anomali_id === anomaliId ? { ...a, catatan_pegawai: editValue } : a
+          )
+        }))
+      }));
 
-    setEditingCatatanId(null);
-    setEditValue('');
-  } catch (err) {
-    alert('Gagal menyimpan catatan: ' + err.message);
-  }
-};
+      setCatatanPegawaiInput(editValue);
+
+      setEditingCatatanId(null);
+      setEditValue('');
+    } catch (err) {
+      alert('Gagal menyimpan catatan: ' + err.message);
+    }
+  };
 
   const toggleExpandKec = (kecName) => {
     setExpandedKec(prev => ({ ...prev, [kecName]: !prev[kecName] }));
@@ -758,40 +802,35 @@ const handleSaveCatatan = async (anomaliId) => {
     setExpandedSnap(prev => ({ ...prev, [compositeKey]: !prev[compositeKey] }));
   };
 
-const semuaSubjekModal = modalDetailObj?.daftarSubjek || [];
-const jumlahSiapEksekusi = semuaSubjekModal.filter(subjek => 
-  subjek.detailAnomali.some(a => a.status_fasih !== 'Sudah Tindak Lanjut FASIH' && a.status_konfirmasi !== 'Belum Tindak Lanjut' && a.catatan_lapangan)
-).length;
+  const semuaSubjekModal = modalDetailObj?.daftarSubjek || [];
+  const jumlahSiapEksekusi = semuaSubjekModal.filter(subjek => 
+    subjek.detailAnomali.some(a => a.status_fasih !== 'Sudah Tindak Lanjut FASIH' && a.status_konfirmasi !== 'Belum Tindak Lanjut' && a.catatan_lapangan)
+  ).length;
 
-// ➕ TAMBAHKAN INI: Hitung subjek yang masih memiliki minimal 1 anomali belum FASIH
-const jumlahBelumFasih = semuaSubjekModal.filter(subjek =>
-  subjek.detailAnomali.some(a => a.status_fasih !== 'Sudah Tindak Lanjut FASIH')
-).length;
+  const jumlahBelumFasih = semuaSubjekModal.filter(subjek =>
+    subjek.detailAnomali.some(a => a.status_fasih !== 'Sudah Tindak Lanjut FASIH')
+  ).length;
 
-const jumlahSelesai = semuaSubjekModal.filter(subjek => subjek.detailAnomali.every(a => a.status_fasih === 'Sudah Tindak Lanjut FASIH')).length;
-const jumlahSemua = semuaSubjekModal.length;
+  const jumlahSelesai = semuaSubjekModal.filter(subjek => subjek.detailAnomali.every(a => a.status_fasih === 'Sudah Tindak Lanjut FASIH')).length;
+  const jumlahSemua = semuaSubjekModal.length;
 
-const subjekTersaring = semuaSubjekModal.filter(subjek => {
-  const isSelesaiSemuaMurni = subjek.detailAnomali.every(a => a.status_fasih === 'Sudah Tindak Lanjut FASIH');
-  const adaSiapEksekusiMurni = subjek.detailAnomali.some(a => a.status_fasih !== 'Sudah Tindak Lanjut FASIH' && a.status_konfirmasi !== 'Belum Tindak Lanjut' && a.catatan_lapangan);
-  const adaYangBaruDisetujuiLokal = subjek.detailAnomali.some(a => idSelesaiLokal.includes(a.anomali_id));
+  const subjekTersaring = semuaSubjekModal.filter(subjek => {
+    const isSelesaiSemuaMurni = subjek.detailAnomali.every(a => a.status_fasih === 'Sudah Tindak Lanjut FASIH');
+    const adaSiapEksekusiMurni = subjek.detailAnomali.some(a => a.status_fasih !== 'Sudah Tindak Lanjut FASIH' && a.status_konfirmasi !== 'Belum Tindak Lanjut' && a.catatan_lapangan);
+    const adaYangBaruDisetujuiLokal = subjek.detailAnomali.some(a => idSelesaiLokal.includes(a.anomali_id));
 
-  if (subjekFilterTab === 'siap_eksekusi') {
-    return (adaSiapEksekusiMurni && !isSelesaiSemuaMurni) || adaYangBaruDisetujuiLokal;
-  }
-  
-  // ➕ TAMBAHKAN INI: Tampilkan subjek jika ADA anomali yang belum selesai FASIH
-if (subjekFilterTab === 'belum_fasih') {
-  const adaYangBelumFasihMurni = subjek.detailAnomali.some(a => a.status_fasih !== 'Sudah Tindak Lanjut FASIH');
-  const adaYangBaruDisetujuiLokal = subjek.detailAnomali.some(a => idSelesaiLokal.includes(a.anomali_id));
+    if (subjekFilterTab === 'siap_eksekusi') {
+      return (adaSiapEksekusiMurni && !isSelesaiSemuaMurni) || adaYangBaruDisetujuiLokal;
+    }
+    
+    if (subjekFilterTab === 'belum_fasih') {
+      const adaYangBelumFasihMurni = subjek.detailAnomali.some(a => a.status_fasih !== 'Sudah Tindak Lanjut FASIH');
+      return adaYangBelumFasihMurni || adaYangBaruDisetujuiLokal;
+    }
 
-  // Tetap tampilkan jika masih ada anomali belum FASIH ATAU baru saja diselesaikan di sesi ini
-  return adaYangBelumFasihMurni || adaYangBaruDisetujuiLokal;
-}
-
-  if (subjekFilterTab === 'selesai') return isSelesaiSemuaMurni;
-  return true;
-});
+    if (subjekFilterTab === 'selesai') return isSelesaiSemuaMurni;
+    return true;
+  });
 
   const subjekSiapTampil = [...subjekTersaring].sort((a, b) => {
     const aSiapAtauBaruSelesai = a.detailAnomali.some(an => (an.catatan_lapangan && an.status_fasih !== 'Sudah Tindak Lanjut FASIH') || idSelesaiLokal.includes(an.anomali_id));
@@ -802,70 +841,60 @@ if (subjekFilterTab === 'belum_fasih') {
     return 0;
   });
 
-  // Hitung berapa jenis teks anomali yang masih ERR
   const jumlahTeksErr = groupedAnomali.filter(a => a.kode_anomali === 'ERR').length;
   const rekapTersaring = groupedAnomali.filter(a => {
     if (filterReviewTab === 'err_only') return a.kode_anomali === 'ERR';
     return true;
   });
-// Helper untuk membuat CSS background progress bar pada sel tabel
-// Helper gradasi warna termal (Merah -> Kuning -> Hijau) berbasis persentase
-const getStyleGradasiTermal = (selesai, total) => {
-  if (!total || total === 0) return {};
-  const persen = Math.min(100, Math.max(0, (selesai / total) * 100));
 
-  // Penentuan skema warna termal berdasarkan tingkat progres
-  let warnaGradasi = 'from-red-500/30 to-red-600/40'; // < 50% (Merah)
-  if (persen >= 80) {
-    warnaGradasi = 'from-emerald-400/30 to-green-500/40'; // >= 80% (Hijau)
-  } else if (persen >= 50) {
-    warnaGradasi = 'from-amber-400/30 to-yellow-500/40'; // 50% - 79% (Kuning)
-  }
+  const getStyleGradasiTermal = (selesai, total) => {
+    if (!total || total === 0) return {};
+    const persen = Math.min(100, Math.max(0, (selesai / total) * 100));
 
-  return {
-    background: `linear-gradient(to right, ${
-      persen >= 80 ? 'rgba(34, 197, 94, 0.25)' : persen >= 50 ? 'rgba(234, 179, 8, 0.25)' : 'rgba(239, 68, 68, 0.25)'
-    } ${persen}%, transparent ${persen}%)`
+    return {
+      background: `linear-gradient(to right, ${
+        persen >= 80 ? 'rgba(34, 197, 94, 0.25)' : persen >= 50 ? 'rgba(234, 179, 8, 0.25)' : 'rgba(239, 68, 68, 0.25)'
+      } ${persen}%, transparent ${persen}%)`
+    };
   };
-};
-if (loading && rawViewData.length === 0) {
-  const persenLoading = loadingProgress.total > 0 
-    ? Math.min(100, Math.round((loadingProgress.current / loadingProgress.total) * 100))
-    : 0;
 
-  return (
-    <div className="min-h-screen flex flex-col items-center justify-center bg-stone-50 p-6 font-sans">
-      <div className="bg-white p-6 rounded-2xl border border-stone-200 shadow-xl max-w-sm w-full space-y-4 text-center">
-        <div className="w-10 h-10 border-4 border-amber-700/20 border-t-amber-700 rounded-full animate-spin mx-auto"></div>
-        
-        <div className="space-y-1">
-          <h3 className="text-xs font-black uppercase tracking-wider text-slate-800">
-            Memuat Data Anomali
-          </h3>
-          <p className="text-[11px] font-mono text-stone-500 font-bold">
-            {loadingProgress.total > 0 ? (
-              <>Mengambil <span className="text-amber-800 font-black">{loadingProgress.current.toLocaleString('id-ID')}</span> dari <span className="text-slate-800 font-black">{loadingProgress.total.toLocaleString('id-ID')}</span> baris data...</>
-            ) : (
-              'Menghubungkan ke server Supabase...'
-            )}
-          </p>
+  if (loading && rawViewData.length === 0) {
+    const persenLoading = loadingProgress.total > 0 
+      ? Math.min(100, Math.round((loadingProgress.current / loadingProgress.total) * 100))
+      : 0;
+
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center bg-stone-50 p-6 font-sans">
+        <div className="bg-white p-6 rounded-2xl border border-stone-200 shadow-xl max-w-sm w-full space-y-4 text-center">
+          <div className="w-10 h-10 border-4 border-amber-700/20 border-t-amber-700 rounded-full animate-spin mx-auto"></div>
+          
+          <div className="space-y-1">
+            <h3 className="text-xs font-black uppercase tracking-wider text-slate-800">
+              Memuat Data Anomali
+            </h3>
+            <p className="text-[11px] font-mono text-stone-500 font-bold">
+              {loadingProgress.total > 0 ? (
+                <>Mengambil <span className="text-amber-800 font-black">{loadingProgress.current.toLocaleString('id-ID')}</span> dari <span className="text-slate-800 font-black">{loadingProgress.total.toLocaleString('id-ID')}</span> baris data...</>
+              ) : (
+                'Menghubungkan ke server Supabase...'
+              )}
+            </p>
+          </div>
+
+          <div className="w-full bg-stone-100 rounded-full h-3 overflow-hidden p-[2px] border border-stone-200 shadow-inner">
+            <div 
+              className="bg-gradient-to-r from-amber-600 to-orange-600 h-full rounded-full transition-all duration-300 ease-out"
+              style={{ width: `${persenLoading}%` }}
+            ></div>
+          </div>
+
+          <span className="text-[10px] font-mono font-bold text-amber-900 bg-amber-50 px-2.5 py-1 rounded-full inline-block border border-amber-200/60">
+            Progres: {persenLoading}%
+          </span>
         </div>
-
-        {/* Dynamic Loading Bar */}
-        <div className="w-full bg-stone-100 rounded-full h-3 overflow-hidden p-[2px] border border-stone-200 shadow-inner">
-          <div 
-            className="bg-gradient-to-r from-amber-600 to-orange-600 h-full rounded-full transition-all duration-300 ease-out"
-            style={{ width: `${persenLoading}%` }}
-          ></div>
-        </div>
-
-        <span className="text-[10px] font-mono font-bold text-amber-900 bg-amber-50 px-2.5 py-1 rounded-full inline-block border border-amber-200/60">
-          Progres: {persenLoading}%
-        </span>
       </div>
-    </div>
-  );
-}
+    );
+  }
 
   return (
     <div className="min-h-screen bg-stone-50 text-slate-700 font-sans antialiased">
@@ -918,7 +947,6 @@ if (loading && rawViewData.length === 0) {
             </button>
           </div>
 
-          {/* DROPDOWN FILTER SNAPSHOT TERBARU / RIWAYAT */}
           <div className="bg-white p-2 rounded-2xl border border-stone-200 shadow-2xs flex items-center gap-2">
             <span className="text-xs font-bold text-slate-600 pl-2">📅 Tanggal Anomali:</span>
             <select
@@ -940,45 +968,114 @@ if (loading && rawViewData.length === 0) {
         </div>
 
         {/* WIDGET KPI GLOBAL */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          <div className="bg-white p-4 rounded-xl border border-stone-200 shadow-2xs">
-            <span className="text-stone-400 text-[10px] font-bold block uppercase tracking-wider">Total Anomali</span>
-            <span className="text-2xl font-black text-slate-800 mt-1 block font-mono">{summaryMetrics.totalAnomali}</span>
-            <span className="text-[10px] text-stone-500 font-medium mt-1 block">Sesuai kategori aktif</span>
+        <div className="space-y-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            {/* CARD 1: Total Anomali */}
+            <div className="bg-white p-4 rounded-xl border border-stone-200 shadow-2xs">
+              <span className="text-stone-400 text-[10px] font-bold block uppercase tracking-wider">Total Anomali</span>
+              <span className="text-2xl font-black text-slate-800 mt-1 block font-mono">{summaryMetrics.totalAnomali}</span>
+              <span className="text-[10px] text-stone-500 font-medium mt-1 block">Sesuai kategori aktif</span>
+            </div>
+
+            {/* CARD 2: Konfirmasi Petugas */}
+            <div className="bg-amber-50/50 p-4 rounded-xl border border-amber-200/50 shadow-2xs">
+              <span className="text-amber-800/80 text-[10px] font-bold block uppercase tracking-wider">Sudah Konfirmasi Petugas</span>
+              <div className="flex items-baseline justify-between mt-1">
+                <span className="text-2xl font-black text-amber-700 font-mono">{summaryMetrics.sudahPcl}</span>
+                <span className="text-xs font-bold text-amber-800 bg-amber-100 px-1.5 py-0.5 rounded-sm font-mono">
+                  {hitungPersen(summaryMetrics.sudahPcl, summaryMetrics.totalAnomali)}
+                </span>
+              </div>
+              <span className="text-[10px] text-amber-900/60 font-medium mt-1 block">Konfirmasi dari petugas</span>
+            </div>
+
+            {/* CARD 3: Sudah Tindak Lanjut FASIH */}
+            <div className="bg-emerald-50/40 p-4 rounded-xl border border-emerald-200/50 shadow-2xs">
+              <span className="text-emerald-800/80 text-[10px] font-bold block uppercase tracking-wider">Sudah Tindak Lanjut Fasih</span>
+              <div className="flex items-baseline justify-between mt-1">
+                <span className="text-2xl font-black text-emerald-700 font-mono">{summaryMetrics.sudahFasih}</span>
+                <span className="text-xs font-bold text-emerald-800 bg-emerald-100 px-1.5 py-0.5 rounded-sm font-mono">
+                  {hitungPersen(summaryMetrics.sudahFasih, summaryMetrics.totalAnomali)}
+                </span>
+              </div>
+              <span className="text-[10px] text-emerald-900/60 font-medium mt-1 block">Selesai tindak lanjut fasih</span>
+            </div>
+
+            {/* CARD 4: Belum Tindak Lanjut FASIH */}
+            <div className="bg-orange-50 border-2 border-orange-400/80 p-4 rounded-xl shadow-xs">
+              <span className="text-orange-900 text-[10px] font-black block uppercase tracking-wider animate-pulse">Belum Tindak Lanjut Fasih</span>
+              <div className="flex items-baseline justify-between mt-1">
+                <span className="text-3xl font-black text-orange-700 font-mono">{summaryMetrics.belumFasih}</span>
+                <span className="text-xs font-black text-orange-955 bg-orange-200 px-1.5 py-0.5 rounded-sm font-mono">
+                  {hitungPersen(summaryMetrics.belumFasih, summaryMetrics.totalAnomali)}
+                </span>
+              </div>
+              <span className="text-[10px] text-orange-900/70 font-medium mt-1 block">Akumulasi belum FASIH</span>
+            </div>
           </div>
 
-          <div className="bg-amber-50/50 p-4 rounded-xl border border-amber-200/50 shadow-2xs">
-            <span className="text-amber-800/80 text-[10px] font-bold block uppercase tracking-wider">Sudah Konfirmasi Petugas</span>
-            <div className="flex items-baseline justify-between mt-1">
-              <span className="text-2xl font-black text-amber-700 font-mono">{summaryMetrics.sudahPcl}</span>
-              <span className="text-xs font-bold text-amber-800 bg-amber-100 px-1.5 py-0.5 rounded-sm font-mono">
-                {hitungPersen(summaryMetrics.sudahPcl, summaryMetrics.totalAnomali)}
-              </span>
-            </div>
-            <span className="text-[10px] text-amber-900/60 font-medium mt-1 block">Konfirmasi dari petugas</span>
-          </div>
+          {/* PANEL RINCIAN ANOMALI PER KATEGORI */}
+<div className="bg-white p-4 rounded-xl border border-stone-200 shadow-3xs space-y-3">
+  <span className="text-xs font-black text-slate-600 uppercase tracking-wider flex items-center gap-1.5">
+    📌 Rincian Per Kategori:
+  </span>
 
-          <div className="bg-emerald-50/40 p-4 rounded-xl border border-emerald-200/50 shadow-2xs">
-            <span className="text-emerald-800/80 text-[10px] font-bold block uppercase tracking-wider">Sudah Tindak Lanjut Fasih</span>
-            <div className="flex items-baseline justify-between mt-1">
-              <span className="text-2xl font-black text-emerald-700 font-mono">{summaryMetrics.sudahFasih}</span>
-              <span className="text-xs font-bold text-emerald-800 bg-emerald-100 px-1.5 py-0.5 rounded-sm font-mono">
-                {hitungPersen(summaryMetrics.sudahFasih, summaryMetrics.totalAnomali)}
-              </span>
-            </div>
-            <span className="text-[10px] text-emerald-900/60 font-medium mt-1 block">Selesai tindak lanjut fasih</span>
-          </div>
+  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+    {Object.keys(summaryMetrics.perKategori).length === 0 ? (
+      <span className="text-xs text-stone-400 italic col-span-full">Tidak ada data kategori</span>
+    ) : (
+      Object.entries(summaryMetrics.perKategori).map(([kategori, val]) => {
+        // Hitung persentase untuk Sudah dan Belum
+        const persenSudah = val.total > 0 ? (val.sudahFasih / val.total) * 100 : 0;
+        const sisaBelumFasih = val.total - val.sudahFasih;
+        const persenBelum = val.total > 0 ? (sisaBelumFasih / val.total) * 100 : 0;
 
-          <div className="bg-orange-50 border-2 border-orange-400/80 p-4 rounded-xl shadow-xs">
-            <span className="text-orange-900 text-[10px] font-black block uppercase tracking-wider animate-pulse">Belum Tindak Lanjut Fasih</span>
-            <div className="flex items-baseline justify-between mt-1">
-              <span className="text-3xl font-black text-orange-700 font-mono">{summaryMetrics.belumFasih}</span>
-              <span className="text-xs font-black text-orange-955 bg-orange-200 px-1.5 py-0.5 rounded-sm font-mono">
-                {hitungPersen(summaryMetrics.belumFasih, summaryMetrics.sudahPcl)}
+        return (
+          <div 
+            key={kategori} 
+            onClick={() => handleBukaModalKategori(kategori, val)}
+            className="bg-stone-50 hover:bg-amber-50/80 border border-stone-200 hover:border-amber-300 rounded-xl p-3 text-xs space-y-2 cursor-pointer transition-all active:scale-95 shadow-3xs"
+          >
+            {/* Header Kategori */}
+            <div className="flex items-center justify-between border-b border-stone-200 pb-1.5">
+              <span className="font-black text-slate-800 uppercase text-[12px] flex items-center gap-1 truncate">
+                <span>🏷️</span> {kategori}
               </span>
+              <span className="text-[10px] text-stone-400 font-bold">Klik Detail ↗</span>
             </div>
-            <span className="text-[10px] text-orange-900/70 font-medium mt-1 block">Belum tindak lanjut Fasih</span>
+
+            {/* Rincian Kebawah */}
+            <div className="space-y-1 font-mono text-[11px]">
+              {/* Total */}
+              <div className="flex justify-between items-center text-slate-700">
+                <span className="font-sans font-bold text-stone-500">Total :</span>
+                <span className="font-extrabold font-mono bg-stone-200/80 px-1.5 py-0.2 rounded text-slate-800">
+                  {val.total}
+                </span>
+              </div>
+
+              {/* Sudah */}
+              <div className="flex justify-between items-center text-emerald-800">
+                <span className="font-sans font-bold">Sudah :</span>
+                <span className="font-extrabold bg-emerald-100/80 px-1.5 py-0.2 rounded">
+                  {val.sudahFasih} ({persenSudah.toFixed(1)}%)
+                </span>
+              </div>
+
+              {/* Belum */}
+              <div className="flex justify-between items-center text-orange-900">
+                <span className="font-sans font-bold">Belum :</span>
+                <span className={`font-extrabold px-1.5 py-0.2 rounded ${sisaBelumFasih > 0 ? 'bg-orange-100' : 'bg-stone-100 text-stone-400'}`}>
+                  {sisaBelumFasih} ({persenBelum.toFixed(1)}%)
+                </span>
+              </div>
+            </div>
           </div>
+        );
+      })
+    )}
+  </div>
+</div>
         </div>
 
         {/* TABEL AGREGAT UTAMA */}
@@ -994,16 +1091,16 @@ if (loading && rawViewData.length === 0) {
                 <input type="file" accept=".xlsx, .xls" onChange={handlePilihFileExcel} className="hidden" disabled={uploading} />
               </label>
               <button 
-  type="button"
-  disabled={loading}
-  onClick={fetchDataMonitoringKantor} 
-  className={`bg-white border text-xs text-amber-800 font-bold px-3 py-1.5 rounded-lg hover:bg-stone-50 shadow-3xs flex items-center gap-1.5 ${
-    loading ? 'opacity-60 cursor-not-allowed' : ''
-  }`}
->
-  <span className={loading ? 'animate-spin inline-block' : ''}>🔄</span>
-  <span>{loading ? 'Memuat Data...' : 'Segarkan Progres'}</span>
-</button>
+                type="button"
+                disabled={loading}
+                onClick={fetchDataMonitoringKantor} 
+                className={`bg-white border text-xs text-amber-800 font-bold px-3 py-1.5 rounded-lg hover:bg-stone-50 shadow-3xs flex items-center gap-1.5 ${
+                  loading ? 'opacity-60 cursor-not-allowed' : ''
+                }`}
+              >
+                <span className={loading ? 'animate-spin inline-block' : ''}>🔄</span>
+                <span>{loading ? 'Memuat Data...' : 'Segarkan Progres'}</span>
+              </button>
             </div>
           </div>
 
@@ -1019,205 +1116,195 @@ if (loading && rawViewData.length === 0) {
                 </tr>
               </thead>
               <tbody className="divide-y divide-stone-150 select-none">
-{treeData.map(kec => {
-  const isKecOpen = !!expandedKec[kec.namaKec];
-  let kecTotal = 0, kecSudahPcl = 0, kecBelumPcl = 0, kecSudahF = 0, kecBelumF = 0;
+                {treeData.map(kec => {
+                  const isKecOpen = !!expandedKec[kec.namaKec];
+                  let kecTotal = 0, kecSudahPcl = 0, kecBelumPcl = 0, kecSudahF = 0, kecBelumF = 0;
 
-  kec.snapshotList.forEach(s => {
-    s.pmlList.forEach(p => {
-      p.kodeList.forEach(c => {
-        kecTotal += c.total; 
-        kecSudahPcl += c.sudahPcl; 
-        kecBelumPcl += c.belumPcl;
-        kecSudahF += c.sudahFasih; 
-        kecBelumF += c.belumFasih;
-      });
-    });
-  });
+                  kec.snapshotList.forEach(s => {
+                    s.pmlList.forEach(p => {
+                      p.kodeList.forEach(c => {
+                        kecTotal += c.total; 
+                        kecSudahPcl += c.sudahPcl; 
+                        kecBelumPcl += c.belumPcl;
+                        kecSudahF += c.sudahFasih; 
+                        kecBelumF += c.belumFasih;
+                      });
+                    });
+                  });
 
-  const persenPcl = kecTotal > 0 ? (kecSudahPcl / kecTotal) * 100 : 0;
-  const persenFasih = kecTotal > 0 ? (kecSudahF / kecTotal) * 100 : 0;
+                  const persenPcl = kecTotal > 0 ? (kecSudahPcl / kecTotal) * 100 : 0;
+                  const persenFasih = kecTotal > 0 ? (kecSudahF / kecTotal) * 100 : 0;
 
-  const warnaTermal = (persen) => {
-    if (persen < 50) return 'from-rose-500 to-red-600';
-    if (persen < 80) return 'from-amber-400 to-yellow-500';
-    return 'from-emerald-400 to-green-600';
-  };
+                  const warnaTermal = (persen) => {
+                    if (persen < 50) return 'from-rose-500 to-red-600';
+                    if (persen < 80) return 'from-amber-400 to-yellow-500';
+                    return 'from-emerald-400 to-green-600';
+                  };
 
-  return (
-    <React.Fragment key={kec.kodeKec}>
-      {/* 🗺️ LEVEL 1: BARIS KECAMATAN (KEMBALI KE DESAIN ASLI ANDA) */}
-      <tr 
-        onClick={() => toggleExpandKec(kec.namaKec)} 
-        className={`hover:bg-amber-50/40 text-slate-900 font-extrabold cursor-pointer transition-colors border-b border-stone-200 ${
-          isKecOpen ? 'bg-amber-50/20 border-l-[4px] border-l-amber-700' : 'bg-white border-l-[4px] border-l-stone-300'
-        }`}
-      >
-        <td className="p-3.5 pl-3 flex items-center gap-2">
-          <span className={`text-[9px] font-mono w-4 text-center ${isKecOpen ? 'text-amber-800' : 'text-stone-400'}`}>
-            {isKecOpen ? '▼' : '▶'}
-          </span>
-          <span className="tracking-tight text-xs uppercase font-black">
-            🗺️ [{kec.kodeKec}] KEC. {kec.namaKec}
-          </span>
-        </td>
-        <td className="p-3.5 text-center text-stone-300 font-mono text-xs">-</td>
-        <td className="p-3.5 text-center font-mono font-black text-slate-800">{kecTotal}</td>
-        
-        {/* KANTONG PROGRES PCL (ASLI) */}
-        <td className="p-3 bg-amber-50/5">
-          <div className="flex items-center gap-3">
-            <div className="flex-1 bg-stone-100 h-2.5 rounded-full overflow-hidden p-[1px] shadow-xs">
-              <div className={`h-full rounded-full bg-gradient-to-r ${warnaTermal(persenPcl)}`} style={{ width: `${persenPcl}%` }}></div>
-            </div>
-            <span className="font-mono text-[11px] w-12 text-right text-amber-950 font-bold">{persenPcl.toFixed(0)}%</span>
-          </div>
-        </td>
-        
-        {/* KANTONG PROGRES FASIH (ASLI) */}
-        <td className="p-3 bg-emerald-50/5 border-l border-stone-200/80">
-          <div className="flex items-center gap-3">
-            <div className="flex-1 bg-stone-100 h-2.5 rounded-full overflow-hidden p-[1px] shadow-xs">
-              <div className={`h-full rounded-full bg-gradient-to-r ${warnaTermal(persenFasih)}`} style={{ width: `${persenFasih}%` }}></div>
-            </div>
-            <span className="font-mono text-[11px] w-12 text-right text-emerald-955 font-bold">{persenFasih.toFixed(0)}%</span>
-          </div>
-        </td>
-      </tr>
-
-      {/* 📅 LEVEL 2: SNAPSHOT (DENGAN BACKGROUND GRADASI MERAH-KUNING-HIJAU) */}
-      {isKecOpen && kec.snapshotList.map(snap => {
-        const snapKey = `${kec.kodeKec}_${snap.tglSnapshot}`;
-        const isSnapOpen = !!expandedSnap[snapKey];
-
-        let snapTotal = 0, snapSudahPcl = 0, snapSudahF = 0;
-        snap.pmlList.forEach(p => {
-          p.kodeList.forEach(c => {
-            snapTotal += c.total; 
-            snapSudahPcl += c.sudahPcl; 
-            snapSudahF += c.sudahFasih;
-          });
-        });
-
-        return (
-          <React.Fragment key={snap.tglSnapshot}>
-            <tr 
-              onClick={() => toggleExpandSnap(kec.kodeKec, snap.tglSnapshot)} 
-              className="bg-stone-100/60 hover:bg-stone-100 text-slate-700 border-b border-stone-200/60 text-xs cursor-pointer transition-colors"
-            >
-              <td className="p-2.5 pl-10 border-l-[3px] border-l-stone-400/80 font-semibold flex items-center gap-1.5">
-                <span className="text-stone-400 text-[8px] w-3 text-center">{isSnapOpen ? '▼' : '▶'}</span>
-                <span className="text-stone-600">📅 Snapshot: {formatTanggalIndo(snap.tglSnapshot)}</span>
-              </td>
-              <td className="p-2.5 text-center text-stone-300">-</td>
-              <td className="p-2.5 text-center font-mono text-stone-600">{snapTotal}</td>
-              <td 
-                style={getStyleGradasiTermal(snapSudahPcl, snapTotal)}
-                className="p-2.5 text-center font-mono text-slate-800 font-bold border-l border-stone-200/40 transition-all"
-              >
-                Sudah Konf Petugas: {snapSudahPcl} / {snapTotal}
-              </td>
-              <td 
-                style={getStyleGradasiTermal(snapSudahF, snapTotal)}
-                className="p-2.5 text-center font-mono text-slate-800 font-bold border-l border-stone-200/40 transition-all"
-              >
-                Sudah Konf Fasih: {snapSudahF} / {snapTotal}
-              </td>
-            </tr>
-
-            {/* 👔 LEVEL 3: PML / PENGAWAS */}
-            {isSnapOpen && snap.pmlList.map(pml => (
-              <React.Fragment key={pml.namaPml}>
-                <tr className="bg-white/80 text-slate-600 border-b border-stone-100 text-xs font-medium">
-                  <td className="p-2 pl-16 border-l-[3px] border-l-stone-300/60 flex items-center gap-2">
-                    <span className="text-slate-400">👔</span>
-                    <span>PML: <strong className="text-slate-800 font-bold">{pml.namaPml}</strong></span>
-                  </td>
-                  <td colSpan="4" className="p-2 text-stone-400 font-mono text-[10px] italic pl-4">{pml.emailPml}</td>
-                </tr>
-
-                {/* ⚠️ LEVEL 4: ANOMALI DATA (DENGAN BACKGROUND GRADASI MERAH-KUNING-HIJAU) */}
-                {pml.kodeList.map(item => {
-                  const adaAntreanFasih = item.belumFasih > 0;
                   return (
-                    <tr
-                      key={item.kode}
-                      onClick={() => handleBukaModalDetail(item, kec.namaKec)}
-                      className={`text-xs border-b border-stone-100 transition-colors cursor-pointer ${
-                        adaAntreanFasih 
-                          ? 'bg-orange-50/20 hover:bg-orange-50/60 border-l-[3px] border-l-orange-500 font-medium' 
-                          : 'hover:bg-stone-50/60 text-slate-500'
-                      }`}
-                    >
-                      <td className="p-2.5 pl-24 font-normal truncate flex items-center gap-2">
-                        {adaAntreanFasih && (
-                          <span className="bg-orange-600 text-white font-black text-[7px] px-1 rounded-xs tracking-wider uppercase shrink-0">BUTUH VERIFIKASI</span>
-                        )}
-                        <span className={adaAntreanFasih ? 'font-semibold text-slate-900' : ''}>
-                          {getInfoAnomali(item.kode, 'deskripsi')}
-                        </span>
-                      </td>
-                      <td className="p-2.5 text-center">
-                        <span className={`font-mono font-bold px-1.5 py-0.5 rounded text-[10px] ${adaAntreanFasih ? 'bg-orange-100 text-orange-900' : 'bg-stone-100 text-stone-600'}`}>{item.kode}</span>
-                      </td>
-                      <td className="p-2.5 text-center font-mono font-bold text-slate-700">{item.total}</td>
-                      
-                      {/* TARGET KOLOM DATA SEBARAN PCL */}
-                      <td 
-                        style={getStyleGradasiTermal(item.sudahPcl, item.total)}
-                        className="p-2.5 font-mono text-center text-slate-700 border-l border-stone-200/40 transition-all"
+                    <React.Fragment key={kec.kodeKec}>
+                      <tr 
+                        onClick={() => toggleExpandKec(kec.namaKec)} 
+                        className={`hover:bg-amber-50/40 text-slate-900 font-extrabold cursor-pointer transition-colors border-b border-stone-200 ${
+                          isKecOpen ? 'bg-amber-50/20 border-l-[4px] border-l-amber-700' : 'bg-white border-l-[4px] border-l-stone-300'
+                        }`}
                       >
-                        <span className="font-bold">{item.sudahPcl}</span>
-                        <span className="text-stone-300 mx-1">/</span>
-                        <span className="font-extrabold">{item.total}</span>
-                        {item.belumPcl > 0 ? (
-                          <span className="ml-1.5 text-[10px] bg-amber-100/90 text-amber-900 font-black px-1.5 py-0.5 rounded-sm">
-                            Sisa: {item.belumPcl}
+                        <td className="p-3.5 pl-3 flex items-center gap-2">
+                          <span className={`text-[9px] font-mono w-4 text-center ${isKecOpen ? 'text-amber-800' : 'text-stone-400'}`}>
+                            {isKecOpen ? '▼' : '▶'}
                           </span>
-                        ) : (
-                          <span className="ml-1.5 text-[10px] text-emerald-700 font-bold">✓</span>
-                        )}
-                      </td>
-                      
-                      {/* TARGET KOLOM DATA SEBARAN FASIH */}
-{/* TARGET KOLOM DATA SEBARAN FASIH */}
-<td 
-  style={getStyleGradasiTermal(item.sudahFasih, item.total)}
-  className="p-2.5 font-mono text-center border-l border-stone-200/40 transition-all"
->
-  <span className="font-bold">{item.sudahFasih}</span>
-  <span className="text-stone-300 mx-1">/</span>
-  <span className="font-extrabold">{item.total}</span>
-  
-  {/* TOTAL BELUM FASIH MURNI (SEMUA AKUMULASI YANG BELUM SELESAI FASIH) */}
-  <span 
-    className={`ml-1.5 text-[10px] ${
-      item.total - item.sudahFasih > 0 
-        ? 'text-red-800 font-black bg-red-100/90 px-1.5 py-0.5 rounded-sm' 
-        : 'text-emerald-800 font-bold bg-emerald-100/80 px-1.5 py-0.5 rounded-sm'
-    }`}
-  >
-    Belum: {item.total - item.sudahFasih}
-  </span>
-</td>
-                    </tr>
+                          <span className="tracking-tight text-xs uppercase font-black">
+                            🗺️ [{kec.kodeKec}] KEC. {kec.namaKec}
+                          </span>
+                        </td>
+                        <td className="p-3.5 text-center text-stone-300 font-mono text-xs">-</td>
+                        <td className="p-3.5 text-center font-mono font-black text-slate-800">{kecTotal}</td>
+                        
+                        <td className="p-3 bg-amber-50/5">
+                          <div className="flex items-center gap-3">
+                            <div className="flex-1 bg-stone-100 h-2.5 rounded-full overflow-hidden p-[1px] shadow-xs">
+                              <div className={`h-full rounded-full bg-gradient-to-r ${warnaTermal(persenPcl)}`} style={{ width: `${persenPcl}%` }}></div>
+                            </div>
+                            <span className="font-mono text-[11px] w-12 text-right text-amber-950 font-bold">{persenPcl.toFixed(0)}%</span>
+                          </div>
+                        </td>
+                        
+                        <td className="p-3 bg-emerald-50/5 border-l border-stone-200/80">
+                          <div className="flex items-center gap-3">
+                            <div className="flex-1 bg-stone-100 h-2.5 rounded-full overflow-hidden p-[1px] shadow-xs">
+                              <div className={`h-full rounded-full bg-gradient-to-r ${warnaTermal(persenFasih)}`} style={{ width: `${persenFasih}%` }}></div>
+                            </div>
+                            <span className="font-mono text-[11px] w-12 text-right text-emerald-955 font-bold">{persenFasih.toFixed(0)}%</span>
+                          </div>
+                        </td>
+                      </tr>
+
+                      {isKecOpen && kec.snapshotList.map(snap => {
+                        const snapKey = `${kec.kodeKec}_${snap.tglSnapshot}`;
+                        const isSnapOpen = !!expandedSnap[snapKey];
+
+                        let snapTotal = 0, snapSudahPcl = 0, snapSudahF = 0;
+                        snap.pmlList.forEach(p => {
+                          p.kodeList.forEach(c => {
+                            snapTotal += c.total; 
+                            snapSudahPcl += c.sudahPcl; 
+                            snapSudahF += c.sudahFasih;
+                          });
+                        });
+
+                        return (
+                          <React.Fragment key={snap.tglSnapshot}>
+                            <tr 
+                              onClick={() => toggleExpandSnap(kec.kodeKec, snap.tglSnapshot)} 
+                              className="bg-stone-100/60 hover:bg-stone-100 text-slate-700 border-b border-stone-200/60 text-xs cursor-pointer transition-colors"
+                            >
+                              <td className="p-2.5 pl-10 border-l-[3px] border-l-stone-400/80 font-semibold flex items-center gap-1.5">
+                                <span className="text-stone-400 text-[8px] w-3 text-center">{isSnapOpen ? '▼' : '▶'}</span>
+                                <span className="text-stone-600">📅 Snapshot: {formatTanggalIndo(snap.tglSnapshot)}</span>
+                              </td>
+                              <td className="p-2.5 text-center text-stone-300">-</td>
+                              <td className="p-2.5 text-center font-mono text-stone-600">{snapTotal}</td>
+                              <td 
+                                style={getStyleGradasiTermal(snapSudahPcl, snapTotal)}
+                                className="p-2.5 text-center font-mono text-slate-800 font-bold border-l border-stone-200/40 transition-all"
+                              >
+                                Sudah Konf Petugas: {snapSudahPcl} / {snapTotal}
+                              </td>
+                              <td 
+                                style={getStyleGradasiTermal(snapSudahF, snapTotal)}
+                                className="p-2.5 text-center font-mono text-slate-800 font-bold border-l border-stone-200/40 transition-all"
+                              >
+                                Sudah Konf Fasih: {snapSudahF} / {snapTotal}
+                              </td>
+                            </tr>
+
+                            {isSnapOpen && snap.pmlList.map(pml => (
+                              <React.Fragment key={pml.namaPml}>
+                                <tr className="bg-white/80 text-slate-600 border-b border-stone-100 text-xs font-medium">
+                                  <td className="p-2 pl-16 border-l-[3px] border-l-stone-300/60 flex items-center gap-2">
+                                    <span className="text-slate-400">👔</span>
+                                    <span>PML: <strong className="text-slate-800 font-bold">{pml.namaPml}</strong></span>
+                                  </td>
+                                  <td colSpan="4" className="p-2 text-stone-400 font-mono text-[10px] italic pl-4">{pml.emailPml}</td>
+                                </tr>
+
+                                {pml.kodeList.map(item => {
+                                  const adaAntreanFasih = item.belumFasih > 0;
+                                  return (
+                                    <tr
+                                      key={item.kode}
+                                      onClick={() => handleBukaModalDetail(item, kec.namaKec)}
+                                      className={`text-xs border-b border-stone-100 transition-colors cursor-pointer ${
+                                        adaAntreanFasih 
+                                          ? 'bg-orange-50/20 hover:bg-orange-50/60 border-l-[3px] border-l-orange-500 font-medium' 
+                                          : 'hover:bg-stone-50/60 text-slate-500'
+                                      }`}
+                                    >
+                                      <td className="p-2.5 pl-24 font-normal truncate flex items-center gap-2">
+                                        {adaAntreanFasih && (
+                                          <span className="bg-orange-600 text-white font-black text-[7px] px-1 rounded-xs tracking-wider uppercase shrink-0">BUTUH VERIFIKASI</span>
+                                        )}
+                                        <span className={adaAntreanFasih ? 'font-semibold text-slate-900' : ''}>
+                                          {getInfoAnomali(item.kode, 'deskripsi')}
+                                        </span>
+                                      </td>
+                                      <td className="p-2.5 text-center">
+                                        <span className={`font-mono font-bold px-1.5 py-0.5 rounded text-[10px] ${adaAntreanFasih ? 'bg-orange-100 text-orange-900' : 'bg-stone-100 text-stone-600'}`}>{item.kode}</span>
+                                      </td>
+                                      <td className="p-2.5 text-center font-mono font-bold text-slate-700">{item.total}</td>
+                                      
+                                      <td 
+                                        style={getStyleGradasiTermal(item.sudahPcl, item.total)}
+                                        className="p-2.5 font-mono text-center text-slate-700 border-l border-stone-200/40 transition-all"
+                                      >
+                                        <span className="font-bold">{item.sudahPcl}</span>
+                                        <span className="text-stone-300 mx-1">/</span>
+                                        <span className="font-extrabold">{item.total}</span>
+                                        {item.belumPcl > 0 ? (
+                                          <span className="ml-1.5 text-[10px] bg-amber-100/90 text-amber-900 font-black px-1.5 py-0.5 rounded-sm">
+                                            Sisa: {item.belumPcl}
+                                          </span>
+                                        ) : (
+                                          <span className="ml-1.5 text-[10px] text-emerald-700 font-bold">✓</span>
+                                        )}
+                                      </td>
+                                      
+                                      <td 
+                                        style={getStyleGradasiTermal(item.sudahFasih, item.total)}
+                                        className="p-2.5 font-mono text-center border-l border-stone-200/40 transition-all"
+                                      >
+                                        <span className="font-bold">{item.sudahFasih}</span>
+                                        <span className="text-stone-300 mx-1">/</span>
+                                        <span className="font-extrabold">{item.total}</span>
+                                        
+                                        <span 
+                                          className={`ml-1.5 text-[10px] ${
+                                            item.total - item.sudahFasih > 0 
+                                              ? 'text-red-800 font-black bg-red-100/90 px-1.5 py-0.5 rounded-sm' 
+                                              : 'text-emerald-800 font-bold bg-emerald-100/80 px-1.5 py-0.5 rounded-sm'
+                                          }`}
+                                        >
+                                          Belum: {item.total - item.sudahFasih}
+                                        </span>
+                                      </td>
+                                    </tr>
+                                  );
+                                })}
+                              </React.Fragment>
+                            ))}
+                          </React.Fragment>
+                        );
+                      })}
+                    </React.Fragment>
                   );
                 })}
-              </React.Fragment>
-            ))}
-          </React.Fragment>
-        );
-      })}
-    </React.Fragment>
-  );
-})}
               </tbody>
             </table>
           </div>
         </div>
       </div>
 
-      {/* MODAL PROSES & REVIEW IMPOR EXCEL CERDAS (MODAL REKAP UNIK) */}
+      {/* MODAL PROSES & REVIEW IMPOR EXCEL CERDAS */}
       {modalUploadReview && (
         <div className="fixed inset-0 bg-slate-950/70 z-50 flex items-center justify-center p-4 backdrop-blur-xs animate-fade-in">
           <div className={`bg-white w-full rounded-2xl border border-stone-200 p-6 shadow-2xl space-y-5 animate-scale-up transition-all ${uploadProgressStatus === 'review_rows' ? 'max-w-4xl' : 'max-w-md'}`}>
@@ -1296,11 +1383,8 @@ if (loading && rawViewData.length === 0) {
               </div>
             )}
 
-            {/* HALAMAN REVIEW REKAP UNIK */}
             {uploadProgressStatus === 'review_rows' && (
               <div className="space-y-4">
-                
-                {/* BANNER RINGKASAN REKAP */}
                 <div className="bg-amber-50 border border-amber-200 p-3 rounded-xl text-xs text-amber-900 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-3xs">
                   <div>
                     <p className="font-bold">
@@ -1311,7 +1395,6 @@ if (loading && rawViewData.length === 0) {
                     </p>
                   </div>
 
-                  {/* FILTER QUICK ACCESS ERR */}
                   <div className="flex items-center gap-1.5 shrink-0">
                     <button
                       type="button"
@@ -1330,7 +1413,6 @@ if (loading && rawViewData.length === 0) {
                   </div>
                 </div>
 
-                {/* TABEL REKAP KODE ANOMALI UNIK */}
                 <div className="overflow-x-auto border rounded-xl max-h-[50vh] bg-stone-50 shadow-inner">
                   <table className="w-full text-left border-collapse text-xs">
                     <thead>
@@ -1457,6 +1539,98 @@ if (loading && rawViewData.length === 0) {
         </div>
       )}
 
+      {/* MODAL RINCIAN ANOMALI PER KATEGORI */}
+      {modalKategoriObj && (
+        <div className="fixed inset-0 bg-slate-950/70 z-40 flex items-center justify-center p-4 backdrop-blur-xs animate-fade-in">
+          <div className="bg-white w-full max-w-2xl rounded-2xl border border-stone-200 p-6 shadow-2xl space-y-4 animate-scale-up">
+            <div className="flex justify-between items-center border-b pb-3">
+              <div className="flex items-center gap-2">
+                <span className="text-xl">🏷️</span>
+                <div>
+                  <h3 className="text-sm font-black uppercase tracking-wider text-slate-800">
+                    Rincian Kategori: {modalKategoriObj.namaKategori}
+                  </h3>
+                  <p className="text-[11px] text-stone-500 font-medium">
+                    Klik pada baris anomali di bawah ini untuk langsung melihat daftar responden.
+                  </p>
+                </div>
+              </div>
+              <button 
+                onClick={() => setModalKategoriObj(null)}
+                className="text-stone-400 hover:text-slate-800 font-bold text-sm bg-stone-100 p-1.5 rounded-full w-7 h-7 flex items-center justify-center"
+              >
+                ✕
+              </button>
+            </div>
+
+{/* Di dalam modalKategoriObj */}
+<div className="grid grid-cols-3 gap-3 text-center">
+  <div className="bg-stone-50 border border-stone-200 p-2.5 rounded-xl">
+    <span className="text-[10px] text-stone-500 font-bold uppercase block">Total Anomali</span>
+    <span className="text-lg font-black text-slate-800 font-mono">{modalKategoriObj.total}</span>
+  </div>
+  <div className="bg-emerald-50 border border-emerald-200 p-2.5 rounded-xl">
+    <span className="text-[10px] text-emerald-800 font-bold uppercase block">Sudah FASIH</span>
+    <span className="text-lg font-black text-emerald-700 font-mono">{modalKategoriObj.sudahFasih}</span>
+  </div>
+  <div className="bg-orange-50 border border-orange-200 p-2.5 rounded-xl">
+    <span className="text-[10px] text-orange-800 font-bold uppercase block">Belum FASIH</span>
+    {/* 💡 Gunakan pengurangan langsung agar konsisten */}
+    <span className="text-lg font-black text-orange-700 font-mono">
+      {modalKategoriObj.total - modalKategoriObj.sudahFasih}
+    </span>
+  </div>
+</div>
+
+            <div className="max-h-[50vh] overflow-y-auto border border-stone-200 rounded-xl divide-y divide-stone-150">
+              {modalKategoriObj.listAnomali.length === 0 ? (
+                <div className="p-6 text-center text-stone-400 font-bold text-xs">
+                  Tidak ada rincian anomali pada kategori ini.
+                </div>
+              ) : (
+                modalKategoriObj.listAnomali.map((anom) => {
+                  const sisaBelum = anom.total - anom.sudahFasih;
+                  return (
+                    <div 
+                      key={anom.kode}
+                      onClick={() => {
+                        setModalKategoriObj(null);
+                        handleBukaModalDetail(anom, 'SEMUA WILAYAH');
+                      }}
+                      className="p-3 hover:bg-amber-50/60 cursor-pointer transition-colors flex items-center justify-between text-xs gap-3"
+                    >
+                      <div className="flex items-center gap-2.5">
+                        <span className="font-mono font-bold bg-amber-100 text-amber-900 px-2 py-0.5 rounded text-[11px] shrink-0">
+                          {anom.kode}
+                        </span>
+                        <span className="font-bold text-slate-800 leading-tight">
+                          {getInfoAnomali(anom.kode, 'deskripsi')}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-3 shrink-0 font-mono">
+                        <span className="text-stone-500 font-semibold">{anom.sudahFasih} / {anom.total}</span>
+                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${sisaBelum > 0 ? 'bg-orange-100 text-orange-900' : 'bg-emerald-100 text-emerald-800'}`}>
+                          {sisaBelum > 0 ? `Belum: ${sisaBelum}` : '✓ Selesai'}
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+
+            <div className="flex justify-end pt-2 border-t">
+              <button 
+                onClick={() => setModalKategoriObj(null)}
+                className="bg-stone-100 hover:bg-stone-200 text-slate-700 font-bold px-4 py-2 rounded-xl text-xs border"
+              >
+                Tutup
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* MODAL DETAIL SUBJEK & SINKRONISASI FASIH */}
       {modalDetailObj && (
         <div className="fixed inset-0 bg-slate-950/60 z-30 flex items-center justify-center p-6 animate-fade-in backdrop-blur-xs">
@@ -1477,24 +1651,23 @@ if (loading && rawViewData.length === 0) {
               <button onClick={handleTutupModal} className="bg-white/10 hover:bg-white/20 text-stone-300 hover:text-white font-black text-sm p-2 rounded-full w-9 h-9 flex items-center justify-center transition-all">✕</button>
             </div>
 
-<div className="flex border-b border-stone-200 bg-stone-100 p-2 gap-2 sticky top-0 z-10 flex-wrap">
-  <button type="button" onClick={() => setSubjekFilterTab('siap_eksekusi')} className={`flex items-center gap-2 px-4 py-2 text-xs font-bold rounded-lg transition-all ${subjekFilterTab === 'siap_eksekusi' ? 'bg-orange-600 text-white shadow-xs' : 'bg-white text-slate-600 hover:bg-stone-50 border border-stone-200'}`}>
-    ⚡ Siap Eksekusi FASIH <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${subjekFilterTab === 'siap_eksekusi' ? 'bg-orange-800 text-orange-100' : 'bg-stone-200 text-slate-600'}`}>{jumlahSiapEksekusi}</span>
-  </button>
+            <div className="flex border-b border-stone-200 bg-stone-100 p-2 gap-2 sticky top-0 z-10 flex-wrap">
+              <button type="button" onClick={() => setSubjekFilterTab('siap_eksekusi')} className={`flex items-center gap-2 px-4 py-2 text-xs font-bold rounded-lg transition-all ${subjekFilterTab === 'siap_eksekusi' ? 'bg-orange-600 text-white shadow-xs' : 'bg-white text-slate-600 hover:bg-stone-50 border border-stone-200'}`}>
+                ⚡ Siap Eksekusi FASIH <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${subjekFilterTab === 'siap_eksekusi' ? 'bg-orange-800 text-orange-100' : 'bg-stone-200 text-slate-600'}`}>{jumlahSiapEksekusi}</span>
+              </button>
 
-  {/* ➕ TAMBAHKAN TOMBOL TAB BARU DI SINI */}
-  <button type="button" onClick={() => setSubjekFilterTab('belum_fasih')} className={`flex items-center gap-2 px-4 py-2 text-xs font-bold rounded-lg transition-all ${subjekFilterTab === 'belum_fasih' ? 'bg-amber-600 text-white shadow-xs' : 'bg-white text-slate-600 hover:bg-stone-50 border border-stone-200'}`}>
-    ⏳ Belum FASIH <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${subjekFilterTab === 'belum_fasih' ? 'bg-amber-800 text-amber-100' : 'bg-stone-200 text-slate-600'}`}>{jumlahBelumFasih}</span>
-  </button>
+              <button type="button" onClick={() => setSubjekFilterTab('belum_fasih')} className={`flex items-center gap-2 px-4 py-2 text-xs font-bold rounded-lg transition-all ${subjekFilterTab === 'belum_fasih' ? 'bg-amber-600 text-white shadow-xs' : 'bg-white text-slate-600 hover:bg-stone-50 border border-stone-200'}`}>
+                ⏳ Belum FASIH <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${subjekFilterTab === 'belum_fasih' ? 'bg-amber-800 text-amber-100' : 'bg-stone-200 text-slate-600'}`}>{jumlahBelumFasih}</span>
+              </button>
 
-  <button type="button" onClick={() => setSubjekFilterTab('semua')} className={`flex items-center gap-2 px-4 py-2 text-xs font-bold rounded-lg transition-all ${subjekFilterTab === 'semua' ? 'bg-slate-800 text-white shadow-xs' : 'bg-white text-slate-600 hover:bg-stone-50 border border-stone-200'}`}>
-    📂 Semua Data <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${subjekFilterTab === 'semua' ? 'bg-slate-950 text-slate-200' : 'bg-stone-200 text-slate-600'}`}>{jumlahSemua}</span>
-  </button>
+              <button type="button" onClick={() => setSubjekFilterTab('semua')} className={`flex items-center gap-2 px-4 py-2 text-xs font-bold rounded-lg transition-all ${subjekFilterTab === 'semua' ? 'bg-slate-800 text-white shadow-xs' : 'bg-white text-slate-600 hover:bg-stone-50 border border-stone-200'}`}>
+                📂 Semua Data <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${subjekFilterTab === 'semua' ? 'bg-slate-950 text-slate-200' : 'bg-stone-200 text-slate-600'}`}>{jumlahSemua}</span>
+              </button>
 
-  <button type="button" onClick={() => setSubjekFilterTab('selesai')} className={`flex items-center gap-2 px-4 py-2 text-xs font-bold rounded-lg transition-all ${subjekFilterTab === 'selesai' ? 'bg-emerald-600 text-white shadow-xs' : 'bg-white text-slate-600 hover:bg-stone-50 border border-stone-200'}`}>
-    ✔ Selesai FASIH <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${subjekFilterTab === 'selesai' ? 'bg-emerald-800 text-emerald-100' : 'bg-stone-200 text-slate-600'}`}>{jumlahSelesai}</span>
-  </button>
-</div>
+              <button type="button" onClick={() => setSubjekFilterTab('selesai')} className={`flex items-center gap-2 px-4 py-2 text-xs font-bold rounded-lg transition-all ${subjekFilterTab === 'selesai' ? 'bg-emerald-600 text-white shadow-xs' : 'bg-white text-slate-600 hover:bg-stone-50 border border-stone-200'}`}>
+                ✔ Selesai FASIH <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${subjekFilterTab === 'selesai' ? 'bg-emerald-800 text-emerald-100' : 'bg-stone-200 text-slate-600'}`}>{jumlahSelesai}</span>
+              </button>
+            </div>
 
             <div className="p-6 overflow-y-auto bg-stone-50/50 space-y-4 flex-1">
               {loadingModal ? (
@@ -1503,13 +1676,13 @@ if (loading && rawViewData.length === 0) {
                 </div>
               ) : subjekSiapTampil.length === 0 ? (
                 <div className="text-center py-16 bg-white rounded-xl border border-dashed border-stone-300">
-<p className="text-stone-400 font-bold text-sm">
-  {subjekFilterTab === 'siap_eksekusi' 
-    ? '🎉 Luar biasa! Tidak ada antrean data yang siap dieksekusi di sini.' 
-    : subjekFilterTab === 'belum_fasih'
-    ? '🎉 Semua data subjek sudah selesai ditindaklanjuti di FASIH!'
-    : 'Tidak ada data sampel yang sesuai dengan kriteria filter.'}
-</p>
+                  <p className="text-stone-400 font-bold text-sm">
+                    {subjekFilterTab === 'siap_eksekusi' 
+                      ? '🎉 Luar biasa! Tidak ada antrean data yang siap dieksekusi di sini.' 
+                      : subjekFilterTab === 'belum_fasih'
+                      ? '🎉 Semua data subjek sudah selesai ditindaklanjuti di FASIH!'
+                      : 'Tidak ada data sampel yang sesuai dengan kriteria filter.'}
+                  </p>
                 </div>
               ) : (
                 subjekSiapTampil.map(subjek => (
@@ -1655,10 +1828,9 @@ if (loading && rawViewData.length === 0) {
                                   type="button" 
                                   disabled={updatingId === anomali.anomali_id} 
                                   onClick={() => {
-  setKonfirmasiId(anomali.anomali_id);
-  // ➕ Sinkronkan isi input modal konfirmasi dengan catatan pegawai yang sudah ada
-  setCatatanPegawaiInput(anomali.catatan_pegawai || '');
-}}
+                                    setKonfirmasiId(anomali.anomali_id);
+                                    setCatatanPegawaiInput(anomali.catatan_pegawai || '');
+                                  }}
                                   className="bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold px-3 py-1.5 rounded-lg text-xs shadow-md transition-all active:scale-95"
                                 >
                                   {updatingId === anomali.anomali_id ? 'Proses...' : '✔ Sudah FASIH'}
@@ -1690,40 +1862,38 @@ if (loading && rawViewData.length === 0) {
               <h4 className="text-xs font-black uppercase tracking-wider text-slate-800">Verifikasi & Penyesuaian Keterangan</h4>
             </div>
             
-{/* DI DALAM MODAL KONFIRMASI (konfirmasiId) */}
-<div className="space-y-3 text-xs leading-relaxed text-slate-650 font-medium">
-  <p>Apakah Anda sudah memeriksa aplikasi FASIH dan setuju menandai data ini sebagai <strong className="text-emerald-700 font-bold">"Sudah Tindak Lanjut FASIH"</strong>?</p>
-  
-  {/* Indikator Status Keterangan Lapangan */}
-  {(() => {
-    const targetSubjek = modalDetailObj?.daftarSubjek.find(s => s.detailAnomali.some(a => a.anomali_id === konfirmasiId));
-    const targetAnomali = targetSubjek?.detailAnomali.find(a => a.anomali_id === konfirmasiId);
-    const adaCatatanLapangan = !!targetAnomali?.catatan_lapangan?.trim();
+            <div className="space-y-3 text-xs leading-relaxed text-slate-650 font-medium">
+              <p>Apakah Anda sudah memeriksa aplikasi FASIH dan setuju menandai data ini sebagai <strong className="text-emerald-700 font-bold">"Sudah Tindak Lanjut FASIH"</strong>?</p>
+              
+              {(() => {
+                const targetSubjek = modalDetailObj?.daftarSubjek.find(s => s.detailAnomali.some(a => a.anomali_id === konfirmasiId));
+                const targetAnomali = targetSubjek?.detailAnomali.find(a => a.anomali_id === konfirmasiId);
+                const adaCatatanLapangan = !!targetAnomali?.catatan_lapangan?.trim();
 
-    return (
-      <div className={`p-2 rounded text-[11px] font-semibold border ${adaCatatanLapangan ? 'bg-emerald-50 border-emerald-200 text-emerald-800' : 'bg-rose-50 border-rose-200 text-rose-800'}`}>
-        {adaCatatanLapangan ? (
-          <span>🟢 Catatan petugas lapangan terisi.</span>
-        ) : (
-          <span>🔴 Catatan petugas lapangan **KOSONG**. Anda wajib mengisi penyesuaian keterangan di bawah ini!</span>
-        )}
-      </div>
-    );
-  })()}
+                return (
+                  <div className={`p-2 rounded text-[11px] font-semibold border ${adaCatatanLapangan ? 'bg-emerald-50 border-emerald-200 text-emerald-800' : 'bg-rose-50 border-rose-200 text-rose-800'}`}>
+                    {adaCatatanLapangan ? (
+                      <span>🟢 Catatan petugas lapangan terisi.</span>
+                    ) : (
+                      <span>🔴 Catatan petugas lapangan <strong>KOSONG</strong>. Anda wajib mengisi penyesuaian keterangan di bawah ini!</span>
+                    )}
+                  </div>
+                );
+              })()}
 
-  <div className="space-y-1 bg-stone-50 p-3 rounded-lg border border-stone-200">
-    <label className="text-[10px] font-black text-slate-600 block uppercase tracking-wide">
-      🖋️ Penyesuaian Keterangan / Catatan Pegawai:
-    </label>
-    <textarea
-      rows="3"
-      value={catatanPegawaiInput}
-      onChange={(e) => setCatatanPegawaiInput(e.target.value)}
-      placeholder="Wajib diisi jika catatan petugas lapangan di atas kosong..."
-      className="w-full bg-white border border-stone-300 rounded-md p-2 text-xs text-slate-800 focus:outline-amber-600 font-sans leading-normal placeholder-stone-400"
-    />
-  </div>
-</div>
+              <div className="space-y-1 bg-stone-50 p-3 rounded-lg border border-stone-200">
+                <label className="text-[10px] font-black text-slate-600 block uppercase tracking-wide">
+                  🖋️ Penyesuaian Keterangan / Catatan Pegawai:
+                </label>
+                <textarea
+                  rows="3"
+                  value={catatanPegawaiInput}
+                  onChange={(e) => setCatatanPegawaiInput(e.target.value)}
+                  placeholder="Wajib diisi jika catatan petugas lapangan di atas kosong..."
+                  className="w-full bg-white border border-stone-300 rounded-md p-2 text-xs text-slate-800 focus:outline-amber-600 font-sans leading-normal placeholder-stone-400"
+                />
+              </div>
+            </div>
 
             <div className="flex justify-end gap-2 pt-2 border-t border-stone-100 text-xs font-bold">
               <button
