@@ -748,9 +748,13 @@ const subjekTersaring = semuaSubjekModal.filter(subjek => {
   }
   
   // ➕ TAMBAHKAN INI: Tampilkan subjek jika ADA anomali yang belum selesai FASIH
-  if (subjekFilterTab === 'belum_fasih') {
-    return subjek.detailAnomali.some(a => a.status_fasih !== 'Sudah Tindak Lanjut FASIH');
-  }
+if (subjekFilterTab === 'belum_fasih') {
+  const adaYangBelumFasihMurni = subjek.detailAnomali.some(a => a.status_fasih !== 'Sudah Tindak Lanjut FASIH');
+  const adaYangBaruDisetujuiLokal = subjek.detailAnomali.some(a => idSelesaiLokal.includes(a.anomali_id));
+
+  // Tetap tampilkan jika masih ada anomali belum FASIH ATAU baru saja diselesaikan di sesi ini
+  return adaYangBelumFasihMurni || adaYangBaruDisetujuiLokal;
+}
 
   if (subjekFilterTab === 'selesai') return isSelesaiSemuaMurni;
   return true;
