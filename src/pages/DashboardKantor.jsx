@@ -808,7 +808,26 @@ if (subjekFilterTab === 'belum_fasih') {
     if (filterReviewTab === 'err_only') return a.kode_anomali === 'ERR';
     return true;
   });
+// Helper untuk membuat CSS background progress bar pada sel tabel
+// Helper gradasi warna termal (Merah -> Kuning -> Hijau) berbasis persentase
+const getStyleGradasiTermal = (selesai, total) => {
+  if (!total || total === 0) return {};
+  const persen = Math.min(100, Math.max(0, (selesai / total) * 100));
 
+  // Penentuan skema warna termal berdasarkan tingkat progres
+  let warnaGradasi = 'from-red-500/30 to-red-600/40'; // < 50% (Merah)
+  if (persen >= 80) {
+    warnaGradasi = 'from-emerald-400/30 to-green-500/40'; // >= 80% (Hijau)
+  } else if (persen >= 50) {
+    warnaGradasi = 'from-amber-400/30 to-yellow-500/40'; // 50% - 79% (Kuning)
+  }
+
+  return {
+    background: `linear-gradient(to right, ${
+      persen >= 80 ? 'rgba(34, 197, 94, 0.25)' : persen >= 50 ? 'rgba(234, 179, 8, 0.25)' : 'rgba(239, 68, 68, 0.25)'
+    } ${persen}%, transparent ${persen}%)`
+  };
+};
 if (loading && rawViewData.length === 0) {
   const persenLoading = loadingProgress.total > 0 
     ? Math.min(100, Math.round((loadingProgress.current / loadingProgress.total) * 100))
@@ -1000,173 +1019,198 @@ if (loading && rawViewData.length === 0) {
                 </tr>
               </thead>
               <tbody className="divide-y divide-stone-150 select-none">
-                {treeData.map(kec => {
-                  const isKecOpen = !!expandedKec[kec.namaKec];
-                  let kecTotal = 0, kecSudahPcl = 0, kecBelumPcl = 0, kecSudahF = 0, kecBelumF = 0;
+{treeData.map(kec => {
+  const isKecOpen = !!expandedKec[kec.namaKec];
+  let kecTotal = 0, kecSudahPcl = 0, kecBelumPcl = 0, kecSudahF = 0, kecBelumF = 0;
 
-                  kec.snapshotList.forEach(s => {
-                    s.pmlList.forEach(p => {
-                      p.kodeList.forEach(c => {
-                        kecTotal += c.total; 
-                        kecSudahPcl += c.sudahPcl; 
-                        kecBelumPcl += c.belumPcl;
-                        kecSudahF += c.sudahFasih; 
-                        kecBelumF += c.belumFasih;
-                      });
-                    });
-                  });
+  kec.snapshotList.forEach(s => {
+    s.pmlList.forEach(p => {
+      p.kodeList.forEach(c => {
+        kecTotal += c.total; 
+        kecSudahPcl += c.sudahPcl; 
+        kecBelumPcl += c.belumPcl;
+        kecSudahF += c.sudahFasih; 
+        kecBelumF += c.belumFasih;
+      });
+    });
+  });
 
-                  const persenPcl = kecTotal > 0 ? (kecSudahPcl / kecTotal) * 100 : 0;
-                  const persenFasih = kecTotal > 0 ? (kecSudahF / kecTotal) * 100 : 0;
+  const persenPcl = kecTotal > 0 ? (kecSudahPcl / kecTotal) * 100 : 0;
+  const persenFasih = kecTotal > 0 ? (kecSudahF / kecTotal) * 100 : 0;
 
-                  const warnaTermal = (persen) => {
-                    if (persen < 50) return 'from-rose-500 to-red-600';
-                    if (persen < 80) return 'from-amber-400 to-yellow-500';
-                    return 'from-emerald-400 to-green-600';
-                  };
+  const warnaTermal = (persen) => {
+    if (persen < 50) return 'from-rose-500 to-red-600';
+    if (persen < 80) return 'from-amber-400 to-yellow-500';
+    return 'from-emerald-400 to-green-600';
+  };
 
+  return (
+    <React.Fragment key={kec.kodeKec}>
+      {/* 🗺️ LEVEL 1: BARIS KECAMATAN (KEMBALI KE DESAIN ASLI ANDA) */}
+      <tr 
+        onClick={() => toggleExpandKec(kec.namaKec)} 
+        className={`hover:bg-amber-50/40 text-slate-900 font-extrabold cursor-pointer transition-colors border-b border-stone-200 ${
+          isKecOpen ? 'bg-amber-50/20 border-l-[4px] border-l-amber-700' : 'bg-white border-l-[4px] border-l-stone-300'
+        }`}
+      >
+        <td className="p-3.5 pl-3 flex items-center gap-2">
+          <span className={`text-[9px] font-mono w-4 text-center ${isKecOpen ? 'text-amber-800' : 'text-stone-400'}`}>
+            {isKecOpen ? '▼' : '▶'}
+          </span>
+          <span className="tracking-tight text-xs uppercase font-black">
+            🗺️ [{kec.kodeKec}] KEC. {kec.namaKec}
+          </span>
+        </td>
+        <td className="p-3.5 text-center text-stone-300 font-mono text-xs">-</td>
+        <td className="p-3.5 text-center font-mono font-black text-slate-800">{kecTotal}</td>
+        
+        {/* KANTONG PROGRES PCL (ASLI) */}
+        <td className="p-3 bg-amber-50/5">
+          <div className="flex items-center gap-3">
+            <div className="flex-1 bg-stone-100 h-2.5 rounded-full overflow-hidden p-[1px] shadow-xs">
+              <div className={`h-full rounded-full bg-gradient-to-r ${warnaTermal(persenPcl)}`} style={{ width: `${persenPcl}%` }}></div>
+            </div>
+            <span className="font-mono text-[11px] w-12 text-right text-amber-950 font-bold">{persenPcl.toFixed(0)}%</span>
+          </div>
+        </td>
+        
+        {/* KANTONG PROGRES FASIH (ASLI) */}
+        <td className="p-3 bg-emerald-50/5 border-l border-stone-200/80">
+          <div className="flex items-center gap-3">
+            <div className="flex-1 bg-stone-100 h-2.5 rounded-full overflow-hidden p-[1px] shadow-xs">
+              <div className={`h-full rounded-full bg-gradient-to-r ${warnaTermal(persenFasih)}`} style={{ width: `${persenFasih}%` }}></div>
+            </div>
+            <span className="font-mono text-[11px] w-12 text-right text-emerald-955 font-bold">{persenFasih.toFixed(0)}%</span>
+          </div>
+        </td>
+      </tr>
+
+      {/* 📅 LEVEL 2: SNAPSHOT (DENGAN BACKGROUND GRADASI MERAH-KUNING-HIJAU) */}
+      {isKecOpen && kec.snapshotList.map(snap => {
+        const snapKey = `${kec.kodeKec}_${snap.tglSnapshot}`;
+        const isSnapOpen = !!expandedSnap[snapKey];
+
+        let snapTotal = 0, snapSudahPcl = 0, snapSudahF = 0;
+        snap.pmlList.forEach(p => {
+          p.kodeList.forEach(c => {
+            snapTotal += c.total; 
+            snapSudahPcl += c.sudahPcl; 
+            snapSudahF += c.sudahFasih;
+          });
+        });
+
+        return (
+          <React.Fragment key={snap.tglSnapshot}>
+            <tr 
+              onClick={() => toggleExpandSnap(kec.kodeKec, snap.tglSnapshot)} 
+              className="bg-stone-100/60 hover:bg-stone-100 text-slate-700 border-b border-stone-200/60 text-xs cursor-pointer transition-colors"
+            >
+              <td className="p-2.5 pl-10 border-l-[3px] border-l-stone-400/80 font-semibold flex items-center gap-1.5">
+                <span className="text-stone-400 text-[8px] w-3 text-center">{isSnapOpen ? '▼' : '▶'}</span>
+                <span className="text-stone-600">📅 Snapshot: {formatTanggalIndo(snap.tglSnapshot)}</span>
+              </td>
+              <td className="p-2.5 text-center text-stone-300">-</td>
+              <td className="p-2.5 text-center font-mono text-stone-600">{snapTotal}</td>
+              <td 
+                style={getStyleGradasiTermal(snapSudahPcl, snapTotal)}
+                className="p-2.5 text-center font-mono text-slate-800 font-bold border-l border-stone-200/40 transition-all"
+              >
+                Sudah Konf Petugas: {snapSudahPcl} / {snapTotal}
+              </td>
+              <td 
+                style={getStyleGradasiTermal(snapSudahF, snapTotal)}
+                className="p-2.5 text-center font-mono text-slate-800 font-bold border-l border-stone-200/40 transition-all"
+              >
+                Sudah Konf Fasih: {snapSudahF} / {snapTotal}
+              </td>
+            </tr>
+
+            {/* 👔 LEVEL 3: PML / PENGAWAS */}
+            {isSnapOpen && snap.pmlList.map(pml => (
+              <React.Fragment key={pml.namaPml}>
+                <tr className="bg-white/80 text-slate-600 border-b border-stone-100 text-xs font-medium">
+                  <td className="p-2 pl-16 border-l-[3px] border-l-stone-300/60 flex items-center gap-2">
+                    <span className="text-slate-400">👔</span>
+                    <span>PML: <strong className="text-slate-800 font-bold">{pml.namaPml}</strong></span>
+                  </td>
+                  <td colSpan="4" className="p-2 text-stone-400 font-mono text-[10px] italic pl-4">{pml.emailPml}</td>
+                </tr>
+
+                {/* ⚠️ LEVEL 4: ANOMALI DATA (DENGAN BACKGROUND GRADASI MERAH-KUNING-HIJAU) */}
+                {pml.kodeList.map(item => {
+                  const adaAntreanFasih = item.belumFasih > 0;
                   return (
-                    <React.Fragment key={kec.kodeKec}>
-                      {/* 🗺️ LEVEL 1: BARIS KECAMATAN */}
-                      <tr 
-                        onClick={() => toggleExpandKec(kec.namaKec)} 
-                        className={`hover:bg-amber-50/40 text-slate-900 font-extrabold cursor-pointer transition-colors border-b border-stone-200 ${
-                          isKecOpen ? 'bg-amber-50/20 border-l-[4px] border-l-amber-700' : 'bg-white border-l-[4px] border-l-stone-300'
-                        }`}
+                    <tr
+                      key={item.kode}
+                      onClick={() => handleBukaModalDetail(item, kec.namaKec)}
+                      className={`text-xs border-b border-stone-100 transition-colors cursor-pointer ${
+                        adaAntreanFasih 
+                          ? 'bg-orange-50/20 hover:bg-orange-50/60 border-l-[3px] border-l-orange-500 font-medium' 
+                          : 'hover:bg-stone-50/60 text-slate-500'
+                      }`}
+                    >
+                      <td className="p-2.5 pl-24 font-normal truncate flex items-center gap-2">
+                        {adaAntreanFasih && (
+                          <span className="bg-orange-600 text-white font-black text-[7px] px-1 rounded-xs tracking-wider uppercase shrink-0">BUTUH VERIFIKASI</span>
+                        )}
+                        <span className={adaAntreanFasih ? 'font-semibold text-slate-900' : ''}>
+                          {getInfoAnomali(item.kode, 'deskripsi')}
+                        </span>
+                      </td>
+                      <td className="p-2.5 text-center">
+                        <span className={`font-mono font-bold px-1.5 py-0.5 rounded text-[10px] ${adaAntreanFasih ? 'bg-orange-100 text-orange-900' : 'bg-stone-100 text-stone-600'}`}>{item.kode}</span>
+                      </td>
+                      <td className="p-2.5 text-center font-mono font-bold text-slate-700">{item.total}</td>
+                      
+                      {/* TARGET KOLOM DATA SEBARAN PCL */}
+                      <td 
+                        style={getStyleGradasiTermal(item.sudahPcl, item.total)}
+                        className="p-2.5 font-mono text-center text-slate-700 border-l border-stone-200/40 transition-all"
                       >
-                        <td className="p-3.5 pl-3 flex items-center gap-2">
-                          <span className={`text-[9px] font-mono w-4 text-center ${isKecOpen ? 'text-amber-800' : 'text-stone-400'}`}>
-                            {isKecOpen ? '▼' : '▶'}
+                        <span className="font-bold">{item.sudahPcl}</span>
+                        <span className="text-stone-300 mx-1">/</span>
+                        <span className="font-extrabold">{item.total}</span>
+                        {item.belumPcl > 0 ? (
+                          <span className="ml-1.5 text-[10px] bg-amber-100/90 text-amber-900 font-black px-1.5 py-0.5 rounded-sm">
+                            Sisa: {item.belumPcl}
                           </span>
-                          <span className="tracking-tight text-xs uppercase font-black">
-                            🗺️ [{kec.kodeKec}] KEC. {kec.namaKec}
-                          </span>
-                        </td>
-                        <td className="p-3.5 text-center text-stone-300 font-mono text-xs">-</td>
-                        <td className="p-3.5 text-center font-mono font-black text-slate-800">{kecTotal}</td>
-                        
-                        {/* KANTONG PROGRES PCL */}
-                        <td className="p-3 bg-amber-50/5">
-                          <div className="flex items-center gap-3">
-                            <div className="flex-1 bg-stone-100 h-2.5 rounded-full overflow-hidden p-[1px] shadow-xs">
-                              <div className={`h-full rounded-full bg-gradient-to-r ${warnaTermal(persenPcl)}`} style={{ width: `${persenPcl}%` }}></div>
-                            </div>
-                            <span className="font-mono text-[11px] w-12 text-right text-amber-950 font-bold">{persenPcl.toFixed(0)}%</span>
-                          </div>
-                        </td>
-                        
-                        {/* KANTONG PROGRES FASIH */}
-                        <td className="p-3 bg-emerald-50/5 border-l border-stone-200/80">
-                          <div className="flex items-center gap-3">
-                            <div className="flex-1 bg-stone-100 h-2.5 rounded-full overflow-hidden p-[1px] shadow-xs">
-                              <div className={`h-full rounded-full bg-gradient-to-r ${warnaTermal(persenFasih)}`} style={{ width: `${persenFasih}%` }}></div>
-                            </div>
-                            <span className="font-mono text-[11px] w-12 text-right text-emerald-955 font-bold">{persenFasih.toFixed(0)}%</span>
-                          </div>
-                        </td>
-                      </tr>
-
-                      {/* 📅 LEVEL 2: SNAPSHOT */}
-                      {isKecOpen && kec.snapshotList.map(snap => {
-                        const snapKey = `${kec.kodeKec}_${snap.tglSnapshot}`;
-                        const isSnapOpen = !!expandedSnap[snapKey];
-
-                        let snapTotal = 0, snapSudahPcl = 0, snapSudahF = 0;
-                        snap.pmlList.forEach(p => {
-                          p.kodeList.forEach(c => {
-                            snapTotal += c.total; 
-                            snapSudahPcl += c.sudahPcl; 
-                            snapSudahF += c.sudahFasih;
-                          });
-                        });
-
-                        return (
-                          <React.Fragment key={snap.tglSnapshot}>
-                            <tr 
-                              onClick={() => toggleExpandSnap(kec.kodeKec, snap.tglSnapshot)} 
-                              className="bg-stone-100/60 hover:bg-stone-100 text-slate-700 border-b border-stone-200/60 text-xs cursor-pointer transition-colors"
-                            >
-                              <td className="p-2.5 pl-10 border-l-[3px] border-l-stone-400/80 font-semibold flex items-center gap-1.5">
-                                <span className="text-stone-400 text-[8px] w-3 text-center">{isSnapOpen ? '▼' : '▶'}</span>
-                                <span className="text-stone-600">📅 Snapshot: {formatTanggalIndo(snap.tglSnapshot)}</span>
-                              </td>
-                              <td className="p-2.5 text-center text-stone-300">-</td>
-                              <td className="p-2.5 text-center font-mono text-stone-600">{snapTotal}</td>
-                              <td className="p-2.5 text-center font-mono text-amber-700 font-bold bg-amber-50/5">Sudah Konf Petugas: {snapSudahPcl}</td>
-                              <td className="p-2.5 text-center font-mono text-emerald-700 font-bold bg-emerald-50/5 border-l border-stone-200/40">Sudah Konf Fasih: {snapSudahF}</td>
-                            </tr>
-
-                            {/* 👔 LEVEL 3: PML / PENGAWAS */}
-                            {isSnapOpen && snap.pmlList.map(pml => (
-                              <React.Fragment key={pml.namaPml}>
-                                <tr className="bg-white/80 text-slate-600 border-b border-stone-100 text-xs font-medium">
-                                  <td className="p-2 pl-16 border-l-[3px] border-l-stone-300/60 flex items-center gap-2">
-                                    <span className="text-slate-400">👔</span>
-                                    <span>PML: <strong className="text-slate-800 font-bold">{pml.namaPml}</strong></span>
-                                  </td>
-                                  <td colSpan="4" className="p-2 text-stone-400 font-mono text-[10px] italic pl-4">{pml.emailPml}</td>
-                                </tr>
-
-                                {/* ⚠️ LEVEL 4: ANOMALI DATA */}
-                                {pml.kodeList.map(item => {
-                                  const adaAntreanFasih = item.belumFasih > 0;
-                                  return (
-                                    <tr
-                                      key={item.kode}
-                                      onClick={() => handleBukaModalDetail(item, kec.namaKec)}
-                                      className={`text-xs border-b border-stone-100 transition-colors cursor-pointer ${
-                                        adaAntreanFasih 
-                                          ? 'bg-orange-50/40 hover:bg-orange-50 border-l-[3px] border-l-orange-500 font-medium' 
-                                          : 'hover:bg-stone-50/60 text-slate-500'
-                                      }`}
-                                    >
-                                      <td className="p-2.5 pl-24 font-normal truncate flex items-center gap-2">
-                                        {adaAntreanFasih && (
-                                          <span className="bg-orange-600 text-white font-black text-[7px] px-1 rounded-xs tracking-wider uppercase shrink-0">BUTUH VERIFIKASI</span>
-                                        )}
-                                        <span className={adaAntreanFasih ? 'font-semibold text-slate-900' : ''}>
-                                          {getInfoAnomali(item.kode, 'deskripsi')}
-                                        </span>
-                                      </td>
-                                      <td className="p-2.5 text-center">
-                                        <span className={`font-mono font-bold px-1.5 py-0.5 rounded text-[10px] ${adaAntreanFasih ? 'bg-orange-100 text-orange-900' : 'bg-stone-100 text-stone-600'}`}>{item.kode}</span>
-                                      </td>
-                                      <td className="p-2.5 text-center font-mono font-bold text-slate-700">{item.total}</td>
-                                      
-                                      {/* TARGET KOLOM DATA SEBARAN PCL */}
-                                      <td className="p-2.5 font-mono text-center text-slate-600 bg-amber-50/5">
-                                        <span className="text-amber-700 font-semibold">{item.sudahPcl}</span>
-                                        <span className="text-stone-300 mx-1">/</span>
-                                        {item.belumPcl > 0 ? (
-                                          <span className="text-[10px] bg-amber-100 text-amber-900 font-extrabold px-1.5 py-0.5 rounded-sm tracking-wide">
-                                            Belum: {item.belumPcl}
-                                          </span>
-                                        ) : (
-                                          <span className="text-[10px] text-stone-400 font-normal italic">
-                                            Selesai
-                                          </span>
-                                        )}
-                                      </td>
-                                      
-                                      {/* TARGET KOLOM DATA SEBARAN FASIH */}
-                                      <td className={`p-2.5 font-mono text-center bg-emerald-50/5 border-l border-stone-200/40 ${adaAntreanFasih ? 'bg-orange-50/20' : ''}`}>
-                                        <span className="text-emerald-700 font-semibold">{item.sudahFasih}</span>
-                                        <span className="text-stone-300 mx-1">/</span>
-                                        <span className={`text-[10px] ${adaAntreanFasih ? 'text-orange-600 font-bold bg-orange-100/50 px-1 rounded' : 'text-stone-400'}`}>
-                                          {adaAntreanFasih ? `⚠️ Antrean: ${item.belumFasih}` : '0'}
-                                        </span>
-                                      </td>
-                                    </tr>
-                                  );
-                                })}
-                              </React.Fragment>
-                            ))}
-                          </React.Fragment>
-                        );
-                      })}
-                    </React.Fragment>
+                        ) : (
+                          <span className="ml-1.5 text-[10px] text-emerald-700 font-bold">✓</span>
+                        )}
+                      </td>
+                      
+                      {/* TARGET KOLOM DATA SEBARAN FASIH */}
+{/* TARGET KOLOM DATA SEBARAN FASIH */}
+<td 
+  style={getStyleGradasiTermal(item.sudahFasih, item.total)}
+  className="p-2.5 font-mono text-center border-l border-stone-200/40 transition-all"
+>
+  <span className="font-bold">{item.sudahFasih}</span>
+  <span className="text-stone-300 mx-1">/</span>
+  <span className="font-extrabold">{item.total}</span>
+  
+  {/* TOTAL BELUM FASIH MURNI (SEMUA AKUMULASI YANG BELUM SELESAI FASIH) */}
+  <span 
+    className={`ml-1.5 text-[10px] ${
+      item.total - item.sudahFasih > 0 
+        ? 'text-red-800 font-black bg-red-100/90 px-1.5 py-0.5 rounded-sm' 
+        : 'text-emerald-800 font-bold bg-emerald-100/80 px-1.5 py-0.5 rounded-sm'
+    }`}
+  >
+    Belum: {item.total - item.sudahFasih}
+  </span>
+</td>
+                    </tr>
                   );
                 })}
+              </React.Fragment>
+            ))}
+          </React.Fragment>
+        );
+      })}
+    </React.Fragment>
+  );
+})}
               </tbody>
             </table>
           </div>
