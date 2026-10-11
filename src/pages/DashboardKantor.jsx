@@ -113,38 +113,63 @@ const [downloadProgress, setDownloadProgress] = useState({ current: 0, total: 0 
     }
   };
 
-  const fetchDataMonitoringKantor = async () => {
+const fetchDataMonitoringKantor = async () => {
     setLoading(true);
     setLoadingProgress({ current: 0, total: 0 });
 
+    // Helper fungsi untuk melakukan retry otomatis jika terjadi timeout/error
+    const fetchWithRetry = async (queryFn, maxRetries = 3, delayMs = 1500) => {
+      for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        try {
+          const result = await queryFn();
+          if (result.error) throw result.error;
+          return result;
+        } catch (err) {
+          const isTimeout = err.message?.includes('timeout') || err.code === '57014';
+          
+          if (attempt === maxRetries) {
+            throw err; // Lempar error jika percobaan terakhir tetap gagal
+          }
+
+          console.warn(`[Retry ${attempt}/${maxRetries}] Query mengalami kendala (${err.message}). Mencoba lagi dalam ${delayMs}ms...`);
+          
+          // Tunggu sebentar sebelum mencoba lagi (penambahan jeda bertahap)
+          await new Promise(resolve => setTimeout(resolve, delayMs * attempt));
+        }
+      }
+    };
+
     try {
+      // Turunkan ukuran batch dari 10000 ke 2500 agar beban query database lebih ringan
       const BATCH_SIZE = 10000;
       let offset = 0;
       let semuaData = [];
       let totalBaris = 0;
 
-      const { data: firstBatch, error: firstErr, count } = await supabaseData
-        .from('view_rekap_agregat_kantor')
-        .select('*', { count: 'exact' })
-        .range(0, BATCH_SIZE - 1);
+      // 1. Tarik Batch Pertama & Dapatkan Total Baris Data dengan Retry
+      const firstBatchResult = await fetchWithRetry(() =>
+        supabaseData
+          .from('view_rekap_agregat_kantor')
+          .select('*', { count: 'exact' })
+          .range(0, BATCH_SIZE - 1)
+      );
 
-      if (firstErr) throw firstErr;
-
-      semuaData = [...(firstBatch || [])];
-      totalBaris = count || semuaData.length;
+      semuaData = [...(firstBatchResult.data || [])];
+      totalBaris = firstBatchResult.count || semuaData.length;
       setLoadingProgress({ current: semuaData.length, total: totalBaris });
 
+      // 2. Tarik Batch Selanjutnya dengan Loop & Retry per Batch
       offset += BATCH_SIZE;
       while (offset < totalBaris) {
-        const { data: nextBatch, error: nextErr } = await supabaseData
-          .from('view_rekap_agregat_kantor')
-          .select('*')
-          .range(offset, offset + BATCH_SIZE - 1);
+        const nextBatchResult = await fetchWithRetry(() =>
+          supabaseData
+            .from('view_rekap_agregat_kantor')
+            .select('*')
+            .range(offset, offset + BATCH_SIZE - 1)
+        );
 
-        if (nextErr) throw nextErr;
-
-        if (nextBatch && nextBatch.length > 0) {
-          semuaData = [...semuaData, ...nextBatch];
+        if (nextBatchResult.data && nextBatchResult.data.length > 0) {
+          semuaData = [...semuaData, ...nextBatchResult.data];
           setLoadingProgress({ current: semuaData.length, total: totalBaris });
         }
 
@@ -165,7 +190,7 @@ const [downloadProgress, setDownloadProgress] = useState({ current: 0, total: 0 
 
     } catch (err) {
       console.error('Gagal memuat data monitoring:', err.message);
-      alert('Gagal memuat data: ' + err.message);
+      alert('Gagal memuat data dari server: ' + err.message + '\n\nSilakan coba tekan tombol "Segarkan Progres" kembali.');
     } finally {
       setLoading(false);
     }
@@ -1343,16 +1368,44 @@ const handleEksekusiUploadKeDatabase = async () => {
                 <input type="file" accept=".xlsx, .xls" onChange={handlePilihFileExcel} className="hidden" disabled={uploading} />
               </label>
 
-              <button 
+<button 
                 type="button"
                 disabled={loading}
                 onClick={fetchDataMonitoringKantor} 
-                className={`bg-white border text-xs text-amber-800 font-bold px-3 py-1.5 rounded-lg hover:bg-stone-50 shadow-3xs flex items-center gap-1.5 ${
-                  loading ? 'opacity-60 cursor-not-allowed' : ''
+                className={`relative overflow-hidden bg-white border border-stone-200 text-xs text-amber-800 font-bold px-3.5 py-1.5 rounded-lg hover:bg-stone-50 shadow-3xs transition-all flex items-center gap-2 ${
+                  loading ? 'cursor-not-allowed border-amber-300 bg-amber-50/40 min-w-[180px]' : ''
                 }`}
               >
-                <span className={loading ? 'animate-spin inline-block' : ''}>🔄</span>
-                <span>{loading ? 'Memuat Data...' : 'Segarkan Progres'}</span>
+                {/* EFEK BACKGROUND PROGRESS FILL SAAT LOADING */}
+                {loading && (
+                  <div 
+                    className="absolute inset-y-0 left-0 bg-amber-200/50 transition-all duration-300 ease-out"
+                    style={{ 
+                      width: `${
+                        loadingProgress.total > 0 
+                          ? Math.min(100, Math.round((loadingProgress.current / loadingProgress.total) * 100)) 
+                          : 0
+                      }%` 
+                    }}
+                  />
+                )}
+
+                {/* KONTEN TOMBOL */}
+                <div className="relative z-10 flex items-center justify-between w-full gap-2 font-mono">
+                  <div className="flex items-center gap-1.5 font-sans">
+                    <span className={loading ? 'animate-spin inline-block text-amber-700' : ''}>🔄</span>
+                    <span>{loading ? 'Memuat Data...' : 'Segarkan Progres'}</span>
+                  </div>
+
+                  {/* TEKS PERSENTASE & HITUNGAN BARIS DATA SAAT LOADING */}
+                  {loading && (
+                    <span className="text-[10px] font-black text-amber-900 bg-amber-100 px-1.5 py-0.5 rounded border border-amber-300/80">
+                      {loadingProgress.total > 0 
+                        ? `${Math.round((loadingProgress.current / loadingProgress.total) * 100)}%` 
+                        : '0%'}
+                    </span>
+                  )}
+                </div>
               </button>
             </div>
           </div>
