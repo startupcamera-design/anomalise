@@ -596,7 +596,7 @@ const [downloadProgress, setDownloadProgress] = useState({ current: 0, total: 0 
     ));
   };
 
-  const handleEksekusiUploadKeDatabase = async () => {
+const handleEksekusiUploadKeDatabase = async () => {
     const adaYangMasihErr = mappedRowItems.some(item => item.kode_anomali === 'ERR');
     if (adaYangMasihErr) {
       alert('Masih ada jenis anomali yang berkode ERR. Silakan tentukan manual kodenya pada rekapitulasi di bawah ini!');
@@ -606,41 +606,68 @@ const [downloadProgress, setDownloadProgress] = useState({ current: 0, total: 0 
     setUploadProgressStatus('mengirim');
 
     try {
-      // 1. AMBIL DAFTAR ASSIGNMENT ID DARI EXCEL YANG SEDANG DIIMPOR
-      const listAssignmentIdImpor = [...new Set(mappedRowItems.map(i => String(i.assignment_id).trim()))];
+      // 1. AMBIL DAFTAR ASSIGNMENT ID UNIK DARI EXCEL
+      const listAssignmentIdImpor = [
+        ...new Set(mappedRowItems.map(i => String(i.assignment_id || '').trim()).filter(Boolean))
+      ];
 
-      // 2. QUERY DUA KUERI PARALEL TERPISAH (RINGAN, ANTI TIMEOUT & BEBAS ERROR PGRST200)
-      const { data: dataAnomaliLama, error: errAnomali } = await supabaseData
-        .from('anomali_data')
-        .select('id, assignment_id, kode_anomali, nama_subjek, tanggal_snapshot, pertama_muncul_pada, detail_indikator')
-        .in('assignment_id', listAssignmentIdImpor);
+      // ----------------------------------------------------------------------
+      // CHUNK 1: QUERY RIWAYAT ANOMALI LAMA SECARA BERTAHAP
+      // GUNAKAN BATCH SIZE 150 AGAR URL GET TIDAK MENCAPAI LIMIT HTTP (ANTI 400 BAD REQUEST)
+      // ----------------------------------------------------------------------
+      const BATCH_SIZE_QUERY = 150; 
+      let dataAnomaliLama = [];
 
-      if (errAnomali) throw errAnomali;
+      for (let i = 0; i < listAssignmentIdImpor.length; i += BATCH_SIZE_QUERY) {
+        const chunkAssignmentIds = listAssignmentIdImpor.slice(i, i + BATCH_SIZE_QUERY);
+        
+        const { data: chunkAnomali, error: errAnomali } = await supabaseData
+          .from('anomali_data')
+          .select('id, assignment_id, kode_anomali, nama_subjek, tanggal_snapshot, pertama_muncul_pada, detail_indikator')
+          .in('assignment_id', chunkAssignmentIds);
 
-      const listAnomaliIds = (dataAnomaliLama || []).map(a => a.id);
+        if (errAnomali) throw errAnomali;
+        if (chunkAnomali) {
+          dataAnomaliLama = [...dataAnomaliLama, ...chunkAnomali];
+        }
+      }
 
+      // ----------------------------------------------------------------------
+      // CHUNK 2: QUERY TINDAK LANJUT LAMA SECARA BERTAHAP (BATCH 150 ID)
+      // ----------------------------------------------------------------------
+      const listAnomaliIds = dataAnomaliLama.map(a => a.id).filter(Boolean);
       let dataTindakLanjutLama = [];
-      if (listAnomaliIds.length > 0) {
-        const { data: dataTL, error: errTL } = await supabaseData
-          .from('tindak_lanjut_anomali')
-          .select('anomali_id, status_konfirmasi, catatan_lapangan, dkonfirmasi_oleh_email, tanggal_konfirmasi, status_fasih, dieksekusi_oleh_email, waktu_eksekusi_fasih, status_monitoring, catatan_pegawai, diperiksa_oleh_email, tanggal_periksa')
-          .in('anomali_id', listAnomaliIds);
 
-        if (errTL) throw errTL;
-        dataTindakLanjutLama = dataTL || [];
+      if (listAnomaliIds.length > 0) {
+        for (let i = 0; i < listAnomaliIds.length; i += BATCH_SIZE_QUERY) {
+          const chunkAnomaliIds = listAnomaliIds.slice(i, i + BATCH_SIZE_QUERY);
+
+          const { data: chunkTL, error: errTL } = await supabaseData
+            .from('tindak_lanjut_anomali')
+            .select('anomali_id, status_konfirmasi, catatan_lapangan, dkonfirmasi_oleh_email, tanggal_konfirmasi, status_fasih, dieksekusi_oleh_email, waktu_eksekusi_fasih, status_monitoring, catatan_pegawai, diperiksa_oleh_email, tanggal_periksa')
+            .in('anomali_id', chunkAnomaliIds);
+
+          if (errTL) throw errTL;
+          if (chunkTL) {
+            dataTindakLanjutLama = [...dataTindakLanjutLama, ...chunkTL];
+          }
+        }
       }
 
       // 3. SUSUN PETA HASH LOKAL O(1) UNTUK PENCOCOKAN CEPAT
       const petaTL = {};
       dataTindakLanjutLama.forEach(tl => {
-        petaTL[tl.anomali_id] = tl;
+        if (tl && tl.anomali_id) {
+          petaTL[tl.anomali_id] = tl;
+        }
       });
 
       const petaRiwayatLama = {};
       const petaMenggantung = {};
 
-      dataAnomaliLama?.forEach(item => {
-        const key = `${String(item.assignment_id).trim()}_${String(item.kode_anomali).trim()}_${String(item.nama_subjek).trim().toLowerCase()}`;
+      dataAnomaliLama.forEach(item => {
+        if (!item) return;
+        const key = `${String(item.assignment_id || '').trim()}_${String(item.kode_anomali || '').trim()}_${String(item.nama_subjek || '').trim().toLowerCase()}`;
         const tl = petaTL[item.id];
 
         if (tl) {
@@ -660,21 +687,26 @@ const [downloadProgress, setDownloadProgress] = useState({ current: 0, total: 0 
       let jumlahGagal = 0;
 
       const petaCatatanRiwayat = {};
-      const setKunciUnikImpor = new Set(); 
+      const setKunciUnikImpor = new Set();
 
-      // 4. FORMAT DATA ANOMALI BARU (INDIKATOR BARU MENIMPA/MENGISI INDIKATOR LAMA)
+      // 4. FORMAT DATA ANOMALI BARU & SANITASI DENGAN KETAT
       const formattedDataRaw = mappedRowItems.map((item) => {
         try {
-          const aturanCocok = masterAnomali.find(a => a.kode === item.kode_anomali);
+          const assignId = String(item.assignment_id || '').trim();
+          const kdAnomali = String(item.kode_anomali || 'ERR').trim();
+          const namaSubjekBersih = String(item.nama_subjek || 'Tanpa Nama').trim();
+
+          if (!assignId) return null;
+
+          const aturanCocok = masterAnomali.find(a => a.kode === kdAnomali);
           const kategori = aturanCocok ? aturanCocok.kategori : 'USAHA';
 
-          const teksCari = item.teks_anomali_asli.toLowerCase();
+          const teksCari = String(item.teks_anomali_asli || '').toLowerCase();
           const tipeMasalahDitemukan = (teksCari.includes('kosong') || teksCari.includes('missing') || teksCari.includes('tidak ada')) 
             ? 'MISSING_VALUE' 
             : 'ANOMALI';
 
-          const namaSubjekBersih = String(item.nama_subjek).trim();
-          const keyGabung = `${String(item.assignment_id).trim()}_${String(item.kode_anomali).trim()}_${namaSubjekBersih.toLowerCase()}`;
+          const keyGabung = `${assignId}_${kdAnomali}_${namaSubjekBersih.toLowerCase()}`;
 
           const dataLama = petaRiwayatLama[keyGabung];
           const pertamaMuncul = petaMenggantung[keyGabung] || (dataLama ? dataLama.tanggal_snapshot : pilihanTanggalSnapshot);
@@ -683,20 +715,21 @@ const [downloadProgress, setDownloadProgress] = useState({ current: 0, total: 0 
             petaCatatanRiwayat[keyGabung] = dataLama;
           }
 
-          // GABUNGKAN INDIKATOR: Nilai indikator dari Excel baru akan menimpa/mengisi nilai lama
-          const indikatorDigabung = {
+          // SANITASI OBJEK JSON (Mencegah nilai 'undefined' penyebab Bad Request)
+          const rawIndikator = {
             ...(dataLama?.detail_indikator_lama || {}),
             ...(item.detail_indikator || {})
           };
+          const indikatorDigabung = JSON.parse(JSON.stringify(rawIndikator));
 
           jumlahSukses++;
           return {
-            idsubsls: item.idsubsls,
-            assignment_id: item.assignment_id,
+            idsubsls: String(item.idsubsls || '-').trim(),
+            assignment_id: assignId,
             nama_subjek: namaSubjekBersih,
-            kode_anomali: item.kode_anomali,
+            kode_anomali: kdAnomali,
             kategori_anomali: kategori,
-            link_fasih: item.link_fasih,
+            link_fasih: item.link_fasih ? String(item.link_fasih).trim() : null,
             tanggal_snapshot: pilihanTanggalSnapshot,
             pertama_muncul_pada: pertamaMuncul,
             tipe_masalah: tipeMasalahDitemukan,
@@ -708,73 +741,83 @@ const [downloadProgress, setDownloadProgress] = useState({ current: 0, total: 0 
         }
       }).filter(item => item !== null);
 
+      // Saring duplikasi baris dalam berkas Excel yang sama
       const formattedData = formattedDataRaw.filter((item) => {
         const kunciUnikBaris = `${item.assignment_id}_${item.kode_anomali}_${item.nama_subjek.toLowerCase()}_${item.tanggal_snapshot}`;
         if (setKunciUnikImpor.has(kunciUnikBaris)) {
-          return false; 
+          return false;
         }
         setKunciUnikImpor.add(kunciUnikBaris);
         return true;
       });
 
-      // 5. UPSERT KE TABEL ANOMALI_DATA
+      // ----------------------------------------------------------------------
+      // CHUNK 3: UPSERT KE TABEL `anomali_data` & `tindak_lanjut_anomali` (BATCH 500 BARIS)
+      // ----------------------------------------------------------------------
+      const BATCH_SIZE_UPSERT = 500;
+
       if (formattedData.length > 0) {
-        const { data: dataBaruDisisipkan, error } = await supabaseData
-          .from('anomali_data')
-          .upsert(formattedData, {
-            onConflict: 'assignment_id, kode_anomali, nama_subjek, tanggal_snapshot',
-            ignoreDuplicates: false 
-          })
-          .select('id, assignment_id, kode_anomali, nama_subjek');
+        for (let i = 0; i < formattedData.length; i += BATCH_SIZE_UPSERT) {
+          const chunkDataAnomali = formattedData.slice(i, i + BATCH_SIZE_UPSERT);
 
-        if (error) throw error;
+          // 5. UPSERT ANOMALI DATA
+          const { data: dataBaruDisisipkan, error: errUpsertAnomali } = await supabaseData
+            .from('anomali_data')
+            .upsert(chunkDataAnomali, {
+              onConflict: 'assignment_id, kode_anomali, nama_subjek, tanggal_snapshot',
+              ignoreDuplicates: false 
+            })
+            .select('id, assignment_id, kode_anomali, nama_subjek');
 
-        // 6. UPSERT KE TABEL TINDAK_LANJUT_ANOMALI
-        if (dataBaruDisisipkan && dataBaruDisisipkan.length > 0) {
-          const payloadTindakLanjut = [];
+          if (errUpsertAnomali) throw errUpsertAnomali;
 
-          dataBaruDisisipkan.forEach((barisBaru) => {
-            const keyCari = `${String(barisBaru.assignment_id).trim()}_${String(barisBaru.kode_anomali).trim()}_${String(barisBaru.nama_subjek).trim().toLowerCase()}`;
-            const dataLamaDitemukan = petaCatatanRiwayat[keyCari];
+          // 6. UPSERT TINDAK LANJUT ANOMALI UNTUK CHUNK INI
+          if (dataBaruDisisipkan && dataBaruDisisipkan.length > 0) {
+            const payloadTindakLanjut = [];
 
-            if (dataLamaDitemukan) {
-              // PERTAHANKAN STATUS SUDAH FASIH & CATATAN PEGAWAI DARI RIWAYAT
-              payloadTindakLanjut.push({
-                anomali_id: barisBaru.id, 
-                status_konfirmasi: dataLamaDitemukan.status_konfirmasi || 'Belum Tindak Lanjut',
-                catatan_lapangan: dataLamaDitemukan.catatan_lapangan || null,
-                dkonfirmasi_oleh_email: dataLamaDitemukan.dkonfirmasi_oleh_email || null,
-                tanggal_konfirmasi: dataLamaDitemukan.tanggal_konfirmasi || null,
-                
-                status_fasih: dataLamaDitemukan.status_fasih || 'Belum Tindak Lanjut FASIH',
-                dieksekusi_oleh_email: dataLamaDitemukan.dieksekusi_oleh_email || null,
-                waktu_eksekusi_fasih: dataLamaDitemukan.waktu_eksekusi_fasih || null,
-                
-                status_monitoring: dataLamaDitemukan.status_monitoring || 'Belum Diperiksa',
-                catatan_pegawai: dataLamaDitemukan.catatan_pegawai || null,
-                diperiksa_oleh_email: dataLamaDitemukan.diperiksa_oleh_email || null,
-                tanggal_periksa: dataLamaDitemukan.tanggal_periksa || null
-              });
-            } else {
-              // Jika ini data anomali yang baru pertama kali muncul
-              payloadTindakLanjut.push({
-                anomali_id: barisBaru.id,
-                status_konfirmasi: 'Belum Tindak Lanjut',
-                catatan_lapangan: null,
-                dkonfirmasi_oleh_email: null,
-                tanggal_konfirmasi: null,
-                status_monitoring: 'Belum Diperiksa',
-                status_fasih: 'Belum Tindak Lanjut FASIH'
-              });
+            dataBaruDisisipkan.forEach((barisBaru) => {
+              if (!barisBaru || !barisBaru.id) return;
+
+              const keyCari = `${String(barisBaru.assignment_id || '').trim()}_${String(barisBaru.kode_anomali || '').trim()}_${String(barisBaru.nama_subjek || '').trim().toLowerCase()}`;
+              const dataLamaDitemukan = petaCatatanRiwayat[keyCari];
+
+              if (dataLamaDitemukan) {
+                payloadTindakLanjut.push({
+                  anomali_id: barisBaru.id, 
+                  status_konfirmasi: dataLamaDitemukan.status_konfirmasi || 'Belum Tindak Lanjut',
+                  catatan_lapangan: dataLamaDitemukan.catatan_lapangan || null,
+                  dkonfirmasi_oleh_email: dataLamaDitemukan.dkonfirmasi_oleh_email || null,
+                  tanggal_konfirmasi: dataLamaDitemukan.tanggal_konfirmasi || null,
+                  
+                  status_fasih: dataLamaDitemukan.status_fasih || 'Belum Tindak Lanjut FASIH',
+                  dieksekusi_oleh_email: dataLamaDitemukan.dieksekusi_oleh_email || null,
+                  waktu_eksekusi_fasih: dataLamaDitemukan.waktu_eksekusi_fasih || null,
+                  
+                  status_monitoring: dataLamaDitemukan.status_monitoring || 'Belum Diperiksa',
+                  catatan_pegawai: dataLamaDitemukan.catatan_pegawai || null,
+                  diperiksa_oleh_email: dataLamaDitemukan.diperiksa_oleh_email || null,
+                  tanggal_periksa: dataLamaDitemukan.tanggal_periksa || null
+                });
+              } else {
+                payloadTindakLanjut.push({
+                  anomali_id: barisBaru.id,
+                  status_konfirmasi: 'Belum Tindak Lanjut',
+                  catatan_lapangan: null,
+                  dkonfirmasi_oleh_email: null,
+                  tanggal_konfirmasi: null,
+                  status_monitoring: 'Belum Diperiksa',
+                  status_fasih: 'Belum Tindak Lanjut FASIH'
+                });
+              }
+            });
+
+            if (payloadTindakLanjut.length > 0) {
+              const { error: errUpsertTindakLanjut } = await supabaseData
+                .from('tindak_lanjut_anomali')
+                .upsert(payloadTindakLanjut, { onConflict: 'anomali_id' });
+
+              if (errUpsertTindakLanjut) throw errUpsertTindakLanjut;
             }
-          });
-
-          if (payloadTindakLanjut.length > 0) {
-            const { error: errUpsertTindakLanjut } = await supabaseData
-              .from('tindak_lanjut_anomali')
-              .upsert(payloadTindakLanjut, { onConflict: 'anomali_id' });
-
-            if (errUpsertTindakLanjut) throw errUpsertTindakLanjut;
           }
         }
       }
@@ -789,7 +832,7 @@ const [downloadProgress, setDownloadProgress] = useState({ current: 0, total: 0 
 
     } catch (err) {
       console.error("❌ PROSES IMPOR GAGAL TOTAL:", err);
-      alert('Gagal mengimpor data anomali: ' + err.message);
+      alert('Gagal mengimpor data anomali: ' + (err.message || JSON.stringify(err)));
       setModalUploadReview(false);
       setUploading(false);
     }
