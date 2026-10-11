@@ -22,6 +22,8 @@ export default function DashboardKantor() {
 
   // State untuk progress bar loading batch
   const [loadingProgress, setLoadingProgress] = useState({ current: 0, total: 0 });
+  // State Progress Download Excel
+const [downloadProgress, setDownloadProgress] = useState({ current: 0, total: 0 });
 
   // Data State
   const [masterAnomali, setMasterAnomali] = useState([]);
@@ -52,7 +54,7 @@ export default function DashboardKantor() {
   // STATE TAB MONITORING UTAMA KANTOR
   const [mainMasalahTab, setMainMasalahTab] = useState('ANOMALI');
 
-  // State Baru untuk Alur Unggah Excel Cerdas
+  // State Baru untuk Alur Unggah Excel Cerdas & Indikator Dinamis
   const [rawExcelData, setRawExcelData] = useState(null);
   const [modalUploadReview, setModalUploadReview] = useState(false);
   const [pilihanTanggalSnapshot, setPilihanTanggalSnapshot] = useState(new Date().toISOString().split('T')[0]);
@@ -61,11 +63,16 @@ export default function DashboardKantor() {
   const [excelHeaders, setExcelHeaders] = useState([]);
   const [mappedRowItems, setMappedRowItems] = useState([]);
 
+  // STATE DOWNLOAD ANOMALI EXCEL
+  const [modalDownload, setModalDownload] = useState(false);
+  const [tglSnapshotDownload, setTglSnapshotDownload] = useState('');
+  const [downloading, setDownloading] = useState(false);
+
   // State Rekap Anomali Unik untuk Review Cepat
   const [groupedAnomali, setGroupedAnomali] = useState([]);
   const [filterReviewTab, setFilterReviewTab] = useState('semua'); // 'semua' | 'err_only'
 
-  // State mapping pilihan kolom excel
+  // State mapping pilihan kolom excel + indikator dinamis
   const [columnMap, setColumnMap] = useState({
     assignment_id: '',
     nama_subjek: '',
@@ -75,6 +82,7 @@ export default function DashboardKantor() {
     subsls: '',
     link_fasih: ''
   });
+  const [selectedIndikatorHeaders, setSelectedIndikatorHeaders] = useState([]);
   const [subjekFilterTab, setSubjekFilterTab] = useState('siap_eksekusi');
 
   // KPI Rapor Ringkasan Global
@@ -150,6 +158,9 @@ export default function DashboardKantor() {
         .sort((a, b) => b.localeCompare(a));
 
       setAvailableSnapshots(daftarTanggal);
+      if (daftarTanggal.length > 0) {
+        setTglSnapshotDownload(daftarTanggal[0]);
+      }
       filterDanProsesDataLokal(semuaData, mainMasalahTab, selectedSnapshot, daftarTanggal);
 
     } catch (err) {
@@ -190,59 +201,58 @@ export default function DashboardKantor() {
     siapkanDataAwal();
   }, []);
 
- const hitungMetrikGlobal = (data) => {
-  let total = 0, sudahPcl = 0, sudahFasih = 0, belumFasih = 0;
-  const rekapKategori = {};
+  const hitungMetrikGlobal = (data) => {
+    let total = 0, sudahPcl = 0, sudahFasih = 0, belumFasih = 0;
+    const rekapKategori = {};
 
-  data.forEach(d => {
-    const totalRow = Number(d.total_rows || 0);
-    const sPcl = Number(d.sudah_pcl || 0);
-    const sFasih = Number(d.sudah_fasih || 0);
-    
-    // hitung total belum FASIH (Total minus Sudah FASIH)
-    const bFasihTotal = totalRow - sFasih;
+    data.forEach(d => {
+      const totalRow = Number(d.total_rows || 0);
+      const sPcl = Number(d.sudah_pcl || 0);
+      const sFasih = Number(d.sudah_fasih || 0);
+      
+      const bFasihTotal = totalRow - sFasih;
 
-    total += totalRow;
-    sudahPcl += sPcl;
-    sudahFasih += sFasih;
-    belumFasih += bFasihTotal; // 💡 Gunakan bFasihTotal
+      total += totalRow;
+      sudahPcl += sPcl;
+      sudahFasih += sFasih;
+      belumFasih += bFasihTotal;
 
-    const aturanCocok = masterAnomali.find(a => a.kode === d.kode_anomali);
-    const kat = d.kategori_anomali || aturanCocok?.kategori || 'LAINNYA';
+      const aturanCocok = masterAnomali.find(a => a.kode === d.kode_anomali);
+      const kat = d.kategori_anomali || aturanCocok?.kategori || 'LAINNYA';
 
-    if (!rekapKategori[kat]) {
-      rekapKategori[kat] = { total: 0, sudahFasih: 0, belumFasih: 0, daftarAnomaliMap: {} };
-    }
-    rekapKategori[kat].total += totalRow;
-    rekapKategori[kat].sudahFasih += sFasih;
-    rekapKategori[kat].belumFasih += bFasihTotal; // 💡 Simpan total belum FASIH per kategori
+      if (!rekapKategori[kat]) {
+        rekapKategori[kat] = { total: 0, sudahFasih: 0, belumFasih: 0, daftarAnomaliMap: {} };
+      }
+      rekapKategori[kat].total += totalRow;
+      rekapKategori[kat].sudahFasih += sFasih;
+      rekapKategori[kat].belumFasih += bFasihTotal;
 
-    const kdAnomali = d.kode_anomali || 'ERR';
-    if (!rekapKategori[kat].daftarAnomaliMap[kdAnomali]) {
-      rekapKategori[kat].daftarAnomaliMap[kdAnomali] = {
-        kode: kdAnomali,
-        total: 0,
-        sudahFasih: 0,
-        belumFasih: 0,
-        kdkec: d.kdkec,
-        pml_email: d.pml_email,
-        tanggal_snapshot: d.tanggal_snapshot
-      };
-    }
-    rekapKategori[kat].daftarAnomaliMap[kdAnomali].total += totalRow;
-    rekapKategori[kat].daftarAnomaliMap[kdAnomali].sudahFasih += sFasih;
-    rekapKategori[kat].daftarAnomaliMap[kdAnomali].belumFasih += bFasihTotal; // 💡 Simpan per item anomali
-  });
+      const kdAnomali = d.kode_anomali || 'ERR';
+      if (!rekapKategori[kat].daftarAnomaliMap[kdAnomali]) {
+        rekapKategori[kat].daftarAnomaliMap[kdAnomali] = {
+          kode: kdAnomali,
+          total: 0,
+          sudahFasih: 0,
+          belumFasih: 0,
+          kdkec: d.kdkec,
+          pml_email: d.pml_email,
+          tanggal_snapshot: d.tanggal_snapshot
+        };
+      }
+      rekapKategori[kat].daftarAnomaliMap[kdAnomali].total += totalRow;
+      rekapKategori[kat].daftarAnomaliMap[kdAnomali].sudahFasih += sFasih;
+      rekapKategori[kat].daftarAnomaliMap[kdAnomali].belumFasih += bFasihTotal;
+    });
 
-  setSummaryMetrics({
-    totalAnomali: total, 
-    sudahPcl: sudahPcl, 
-    belumPcl: total - sudahPcl, 
-    sudahFasih: sudahFasih, 
-    belumFasih: belumFasih,
-    perKategori: rekapKategori
-  });
-};
+    setSummaryMetrics({
+      totalAnomali: total, 
+      sudahPcl: sudahPcl, 
+      belumPcl: total - sudahPcl, 
+      sudahFasih: sudahFasih, 
+      belumFasih: belumFasih,
+      perKategori: rekapKategori
+    });
+  };
 
   const prosesStrukturAgregat = (data) => {
     const kecMap = {};
@@ -300,6 +310,140 @@ export default function DashboardKantor() {
     setTreeData(finalTree);
   };
 
+  // FUNGSI EKSPOR ANOMALI KE EXCEL DENGAN PERFORMA TINGGI
+// FUNGSI EKSPOR ANOMALI KE EXCEL DENGAN VIEW & BATCHING (SANGAT RINGAN & ANTI-FETCH ERROR)
+// FUNGSI EKSPOR ANOMALI KE EXCEL DENGAN PROGRESS TRACKER
+  const handleDownloadAnomaliExcel = async () => {
+    if (!tglSnapshotDownload) {
+      alert("Silakan pilih tanggal snapshot terlebih dahulu!");
+      return;
+    }
+
+    setDownloading(true);
+    setDownloadProgress({ current: 0, total: 0 });
+
+    try {
+      const BATCH_SIZE = 1000;
+      let offset = 0;
+      let semuaDataAnomali = [];
+      let totalData = 0;
+
+      // 1. TARIK BATCH PERTAMA & AMBIL TOTAL JUMLAH DATA
+      const { data: firstBatch, error: firstErr, count } = await supabaseData
+        .from('view_monitoring_anomali')
+        .select(`
+          kdkec,
+          nmkec,
+          kddesa,
+          nmdesa,
+          idsubsls,
+          kode_anomali,
+          status_konfirmasi,
+          catatan_lapangan,
+          catatan_pegawai,
+          status_fasih
+        `, { count: 'exact' })
+        .eq('tanggal_snapshot', tglSnapshotDownload)
+        .range(0, BATCH_SIZE - 1);
+
+      if (firstErr) throw firstErr;
+
+      semuaDataAnomali = [...(firstBatch || [])];
+      totalData = count || semuaDataAnomali.length;
+      setDownloadProgress({ current: semuaDataAnomali.length, total: totalData });
+
+      if (semuaDataAnomali.length === 0) {
+        alert(`Tidak ada data anomali ditemukan pada tanggal snapshot ${formatTanggalIndo(tglSnapshotDownload)}.`);
+        setDownloading(false);
+        return;
+      }
+
+      // 2. TARIK BATCH TERSISA SECARA BERTAHAP & UPDATE PROGRESS
+      offset += BATCH_SIZE;
+      while (offset < totalData) {
+        const { data: nextBatch, error: nextErr } = await supabaseData
+          .from('view_monitoring_anomali')
+          .select(`
+            kdkec,
+            nmkec,
+            kddesa,
+            nmdesa,
+            idsubsls,
+            kode_anomali,
+            status_konfirmasi,
+            catatan_lapangan,
+            catatan_pegawai,
+            status_fasih
+          `)
+          .eq('tanggal_snapshot', tglSnapshotDownload)
+          .range(offset, offset + BATCH_SIZE - 1);
+
+        if (nextErr) throw nextErr;
+
+        if (nextBatch && nextBatch.length > 0) {
+          semuaDataAnomali = [...semuaDataAnomali, ...nextBatch];
+          setDownloadProgress({ current: semuaDataAnomali.length, total: totalData });
+        }
+
+        offset += BATCH_SIZE;
+      }
+
+      // 3. SUSUN DATA UNTUK EXCEL
+      const dataSiapCetak = semuaDataAnomali.map(item => ({
+        kdkec: item.kdkec || '-',
+        nmkec: item.nmkec || '-',
+        kddesa: item.kddesa || '-',
+        nmdesa: item.nmdesa || '-',
+        idsubsls: item.idsubsls || '-',
+        kode_anomali: item.kode_anomali || 'ERR',
+        status_konfirmasi: item.status_konfirmasi || 'Belum Tindak Lanjut',
+        catatan_lapangan: item.catatan_lapangan || '-',
+        catatan_pegawai: item.catatan_pegawai || '-',
+        status_fasih: item.status_fasih || 'Belum Tindak Lanjut FASIH'
+      }));
+
+      // 4. URUTKAN DATA (kode_anomali ASC, idsubsls ASC)
+      dataSiapCetak.sort((a, b) => {
+        const cmpKode = String(a.kode_anomali).localeCompare(String(b.kode_anomali));
+        if (cmpKode !== 0) return cmpKode;
+        return String(a.idsubsls).localeCompare(String(b.idsubsls));
+      });
+
+      // 5. MEMBUAT DAN MENGENERASI FILE EXCEL
+      const worksheet = XLSX.utils.json_to_sheet(dataSiapCetak, {
+        header: [
+          'kdkec', 
+          'nmkec', 
+          'kddesa', 
+          'nmdesa', 
+          'idsubsls', 
+          'kode_anomali', 
+          'status_konfirmasi', 
+          'catatan_lapangan', 
+          'catatan_pegawai', 
+          'status_fasih'
+        ]
+      });
+
+      worksheet['!cols'] = [
+        { wch: 10 }, { wch: 22 }, { wch: 12 }, { wch: 22 }, { wch: 18 },
+        { wch: 14 }, { wch: 25 }, { wch: 35 }, { wch: 35 }, { wch: 28 }
+      ];
+
+      const workbook = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(workbook, worksheet, 'Data Anomali');
+
+      XLSX.writeFile(workbook, `ANOMALI_SIMALI_${tglSnapshotDownload}.xlsx`);
+      setModalDownload(false);
+
+    } catch (err) {
+      console.error("Gagal mengunduh Excel:", err);
+      alert("Gagal mengunduh data anomali: " + err.message);
+    } finally {
+      setDownloading(false);
+    }
+  };
+
   const handlePilihFileExcel = (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -341,6 +485,7 @@ export default function DashboardKantor() {
           link_fasih: tebakKolom(['linkfasih', 'link_fasih', 'urlfasih', 'tautan'])
         });
 
+        setSelectedIndikatorHeaders([]); // Reset pilihan indikator
         setRawExcelData(rawData);
         setHasilUploadRingkasan(null);
         setModalUploadReview(true); 
@@ -351,6 +496,14 @@ export default function DashboardKantor() {
     };
     reader.readAsBinaryString(file);
     e.target.value = '';
+  };
+
+  const toggleIndikatorHeader = (headerName) => {
+    setSelectedIndikatorHeaders(prev => 
+      prev.includes(headerName) 
+        ? prev.filter(h => h !== headerName) 
+        : [...prev, headerName]
+    );
   };
 
   const handleProsesReviewBarisData = () => {
@@ -378,6 +531,15 @@ export default function DashboardKantor() {
       const subSls = subSlsRaw.trim().padStart(2, '0');
       const generatedIdSubSls = `${desa}${sls}${subSls}`;
 
+      // Ekstrak Indikator Dinamis
+      const detailIndikatorObj = {};
+      selectedIndikatorHeaders.forEach(hdr => {
+        const val = row[hdr];
+        if (val !== undefined && val !== null && String(val).trim() !== '') {
+          detailIndikatorObj[hdr] = String(val).trim();
+        }
+      });
+
       daftarAnomaliTeks.forEach((teksSatuan) => {
         const teksBersih = teksSatuan.trim().replace(/^[,;\s]+|[,;\s]+$/g, '');
         if (!teksBersih) return;
@@ -396,7 +558,8 @@ export default function DashboardKantor() {
           nama_subjek: row[columnMap.nama_subjek] || 'Tanpa Nama',
           teks_anomali_asli: teksBersih, 
           kode_anomali: kodeAnomali,
-          link_fasih: columnMap.link_fasih ? (row[columnMap.link_fasih] || '') : ''
+          link_fasih: columnMap.link_fasih ? (row[columnMap.link_fasih] || '') : '',
+          detail_indikator: detailIndikatorObj
         });
       });
     });
@@ -443,15 +606,55 @@ export default function DashboardKantor() {
     setUploadProgressStatus('mengirim');
 
     try {
-      const { data: historiLengkap } = await supabaseData
-        .from('view_monitoring_anomali')
-        .select('assignment_id, kode_anomali, nama_subjek, tanggal_snapshot, status_konfirmasi, catatan_lapangan, dkonfirmasi_oleh_email, tanggal_konfirmasi')
-        .not('catatan_lapangan', 'is', null);
+      // 1. AMBIL DAFTAR ASSIGNMENT ID DARI EXCEL YANG SEDANG DIIMPOR
+      const listAssignmentIdImpor = [...new Set(mappedRowItems.map(i => String(i.assignment_id).trim()))];
 
-      const { data: dataMenggantung } = await supabaseData
-        .from('view_monitoring_anomali')
-        .select('assignment_id, kode_anomali, nama_subjek, pertama_muncul_pada')
-        .not('status_fasih', 'eq', 'Sudah Tindak Lanjut FASIH');
+      // 2. QUERY DUA KUERI PARALEL TERPISAH (RINGAN, ANTI TIMEOUT & BEBAS ERROR PGRST200)
+      const { data: dataAnomaliLama, error: errAnomali } = await supabaseData
+        .from('anomali_data')
+        .select('id, assignment_id, kode_anomali, nama_subjek, tanggal_snapshot, pertama_muncul_pada, detail_indikator')
+        .in('assignment_id', listAssignmentIdImpor);
+
+      if (errAnomali) throw errAnomali;
+
+      const listAnomaliIds = (dataAnomaliLama || []).map(a => a.id);
+
+      let dataTindakLanjutLama = [];
+      if (listAnomaliIds.length > 0) {
+        const { data: dataTL, error: errTL } = await supabaseData
+          .from('tindak_lanjut_anomali')
+          .select('anomali_id, status_konfirmasi, catatan_lapangan, dkonfirmasi_oleh_email, tanggal_konfirmasi, status_fasih, dieksekusi_oleh_email, waktu_eksekusi_fasih, status_monitoring, catatan_pegawai, diperiksa_oleh_email, tanggal_periksa')
+          .in('anomali_id', listAnomaliIds);
+
+        if (errTL) throw errTL;
+        dataTindakLanjutLama = dataTL || [];
+      }
+
+      // 3. SUSUN PETA HASH LOKAL O(1) UNTUK PENCOCOKAN CEPAT
+      const petaTL = {};
+      dataTindakLanjutLama.forEach(tl => {
+        petaTL[tl.anomali_id] = tl;
+      });
+
+      const petaRiwayatLama = {};
+      const petaMenggantung = {};
+
+      dataAnomaliLama?.forEach(item => {
+        const key = `${String(item.assignment_id).trim()}_${String(item.kode_anomali).trim()}_${String(item.nama_subjek).trim().toLowerCase()}`;
+        const tl = petaTL[item.id];
+
+        if (tl) {
+          petaRiwayatLama[key] = {
+            ...tl,
+            tanggal_snapshot: item.tanggal_snapshot,
+            detail_indikator_lama: item.detail_indikator || {}
+          };
+
+          if (tl.status_fasih !== 'Sudah Tindak Lanjut FASIH') {
+            petaMenggantung[key] = item.pertama_muncul_pada;
+          }
+        }
+      });
 
       let jumlahSukses = 0;
       let jumlahGagal = 0;
@@ -459,6 +662,7 @@ export default function DashboardKantor() {
       const petaCatatanRiwayat = {};
       const setKunciUnikImpor = new Set(); 
 
+      // 4. FORMAT DATA ANOMALI BARU (INDIKATOR BARU MENIMPA/MENGISI INDIKATOR LAMA)
       const formattedDataRaw = mappedRowItems.map((item) => {
         try {
           const aturanCocok = masterAnomali.find(a => a.kode === item.kode_anomali);
@@ -470,25 +674,20 @@ export default function DashboardKantor() {
             : 'ANOMALI';
 
           const namaSubjekBersih = String(item.nama_subjek).trim();
-
-          const temukanDataLama = dataMenggantung?.find(
-            old => old.assignment_id === item.assignment_id && 
-                   old.kode_anomali === item.kode_anomali &&
-                   String(old.nama_subjek).trim().toLowerCase() === namaSubjekBersih.toLowerCase()
-          );
-
-          const jejakMasaLalu = historiLengkap?.find(
-            old => String(old.assignment_id).trim().toLowerCase() === String(item.assignment_id).trim().toLowerCase() && 
-                   String(old.kode_anomali).trim().toLowerCase() === String(item.kode_anomali).trim().toLowerCase() && 
-                   String(old.nama_subjek).trim().toLowerCase() === namaSubjekBersih.toLowerCase() &&
-                   old.tanggal_snapshot < pilihanTanggalSnapshot
-          );
-
           const keyGabung = `${String(item.assignment_id).trim()}_${String(item.kode_anomali).trim()}_${namaSubjekBersih.toLowerCase()}`;
 
-          if (jejakMasaLalu) {
-            petaCatatanRiwayat[keyGabung] = jejakMasaLalu;
+          const dataLama = petaRiwayatLama[keyGabung];
+          const pertamaMuncul = petaMenggantung[keyGabung] || (dataLama ? dataLama.tanggal_snapshot : pilihanTanggalSnapshot);
+
+          if (dataLama) {
+            petaCatatanRiwayat[keyGabung] = dataLama;
           }
+
+          // GABUNGKAN INDIKATOR: Nilai indikator dari Excel baru akan menimpa/mengisi nilai lama
+          const indikatorDigabung = {
+            ...(dataLama?.detail_indikator_lama || {}),
+            ...(item.detail_indikator || {})
+          };
 
           jumlahSukses++;
           return {
@@ -499,8 +698,9 @@ export default function DashboardKantor() {
             kategori_anomali: kategori,
             link_fasih: item.link_fasih,
             tanggal_snapshot: pilihanTanggalSnapshot,
-            pertama_muncul_pada: temukanDataLama ? temukanDataLama.pertama_muncul_pada : pilihanTanggalSnapshot,
-            tipe_masalah: tipeMasalahDitemukan 
+            pertama_muncul_pada: pertamaMuncul,
+            tipe_masalah: tipeMasalahDitemukan,
+            detail_indikator: indikatorDigabung
           };
         } catch (errRow) {
           jumlahGagal++;
@@ -517,6 +717,7 @@ export default function DashboardKantor() {
         return true;
       });
 
+      // 5. UPSERT KE TABEL ANOMALI_DATA
       if (formattedData.length > 0) {
         const { data: dataBaruDisisipkan, error } = await supabaseData
           .from('anomali_data')
@@ -528,6 +729,7 @@ export default function DashboardKantor() {
 
         if (error) throw error;
 
+        // 6. UPSERT KE TABEL TINDAK_LANJUT_ANOMALI
         if (dataBaruDisisipkan && dataBaruDisisipkan.length > 0) {
           const payloadTindakLanjut = [];
 
@@ -536,21 +738,25 @@ export default function DashboardKantor() {
             const dataLamaDitemukan = petaCatatanRiwayat[keyCari];
 
             if (dataLamaDitemukan) {
+              // PERTAHANKAN STATUS SUDAH FASIH & CATATAN PEGAWAI DARI RIWAYAT
               payloadTindakLanjut.push({
                 anomali_id: barisBaru.id, 
-                status_konfirmasi: dataLamaDitemukan.status_konfirmasi,
-                catatan_lapangan: dataLamaDitemukan.catatan_lapangan,
-                dkonfirmasi_oleh_email: dataLamaDitemukan.dkonfirmasi_oleh_email,
-                tanggal_konfirmasi: dataLamaDitemukan.tanggal_konfirmasi,
-                status_monitoring: 'Belum Diperiksa',
-                catatan_pegawai: null,
-                diperiksa_oleh_email: null,
-                tanggal_periksa: null,
-                status_fasih: 'Belum Tindak Lanjut FASIH',
-                dieksekusi_oleh_email: null,
-                waktu_eksekusi_fasih: null
+                status_konfirmasi: dataLamaDitemukan.status_konfirmasi || 'Belum Tindak Lanjut',
+                catatan_lapangan: dataLamaDitemukan.catatan_lapangan || null,
+                dkonfirmasi_oleh_email: dataLamaDitemukan.dkonfirmasi_oleh_email || null,
+                tanggal_konfirmasi: dataLamaDitemukan.tanggal_konfirmasi || null,
+                
+                status_fasih: dataLamaDitemukan.status_fasih || 'Belum Tindak Lanjut FASIH',
+                dieksekusi_oleh_email: dataLamaDitemukan.dieksekusi_oleh_email || null,
+                waktu_eksekusi_fasih: dataLamaDitemukan.waktu_eksekusi_fasih || null,
+                
+                status_monitoring: dataLamaDitemukan.status_monitoring || 'Belum Diperiksa',
+                catatan_pegawai: dataLamaDitemukan.catatan_pegawai || null,
+                diperiksa_oleh_email: dataLamaDitemukan.diperiksa_oleh_email || null,
+                tanggal_periksa: dataLamaDitemukan.tanggal_periksa || null
               });
             } else {
+              // Jika ini data anomali yang baru pertama kali muncul
               payloadTindakLanjut.push({
                 anomali_id: barisBaru.id,
                 status_konfirmasi: 'Belum Tindak Lanjut',
@@ -616,7 +822,7 @@ export default function DashboardKantor() {
     try {
       let query = supabaseData
         .from('view_monitoring_anomali')
-        .select('anomali_id, assignment_id, nama_subjek, nmdesa, nmsls, nama_pcl, pcl_email, link_fasih, kode_anomali, status_konfirmasi, catatan_lapangan, status_fasih, catatan_pegawai');
+        .select('anomali_id, assignment_id, nama_subjek, nmdesa, nmsls, nama_pcl, pcl_email, link_fasih, kode_anomali, status_konfirmasi, catatan_lapangan, status_fasih, catatan_pegawai, detail_indikator');
 
       if (itemObj.kdkec) query = query.eq('kdkec', itemObj.kdkec);
       if (itemObj.pml_email) query = query.eq('pml_email', itemObj.pml_email);
@@ -645,6 +851,7 @@ export default function DashboardKantor() {
             catatan_lapangan: a.catatan_lapangan,
             status_fasih: a.status_fasih,
             catatan_pegawai: a.catatan_pegawai,
+            detail_indikator: a.detail_indikator || {}
           }))
         };
       });
@@ -1014,68 +1221,62 @@ export default function DashboardKantor() {
             </div>
           </div>
 
-          {/* PANEL RINCIAN ANOMALI PER KATEGORI */}
-<div className="bg-white p-4 rounded-xl border border-stone-200 shadow-3xs space-y-3">
-  <span className="text-xs font-black text-slate-600 uppercase tracking-wider flex items-center gap-1.5">
-    📌 Rincian Per Kategori:
-  </span>
+          {/* PANEL RINCIAN ANOMALI PER KATEGORI (GRID KEBAWAH) */}
+          <div className="bg-white p-4 rounded-xl border border-stone-200 shadow-3xs space-y-3">
+            <span className="text-xs font-black text-slate-600 uppercase tracking-wider flex items-center gap-1.5">
+              📌 Rincian Per Kategori:
+            </span>
 
-  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
-    {Object.keys(summaryMetrics.perKategori).length === 0 ? (
-      <span className="text-xs text-stone-400 italic col-span-full">Tidak ada data kategori</span>
-    ) : (
-      Object.entries(summaryMetrics.perKategori).map(([kategori, val]) => {
-        // Hitung persentase untuk Sudah dan Belum
-        const persenSudah = val.total > 0 ? (val.sudahFasih / val.total) * 100 : 0;
-        const sisaBelumFasih = val.total - val.sudahFasih;
-        const persenBelum = val.total > 0 ? (sisaBelumFasih / val.total) * 100 : 0;
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+              {Object.keys(summaryMetrics.perKategori).length === 0 ? (
+                <span className="text-xs text-stone-400 italic col-span-full">Tidak ada data kategori</span>
+              ) : (
+                Object.entries(summaryMetrics.perKategori).map(([kategori, val]) => {
+                  const persenSudah = val.total > 0 ? (val.sudahFasih / val.total) * 100 : 0;
+                  const sisaBelumFasih = val.total - val.sudahFasih;
+                  const persenBelum = val.total > 0 ? (sisaBelumFasih / val.total) * 100 : 0;
 
-        return (
-          <div 
-            key={kategori} 
-            onClick={() => handleBukaModalKategori(kategori, val)}
-            className="bg-stone-50 hover:bg-amber-50/80 border border-stone-200 hover:border-amber-300 rounded-xl p-3 text-xs space-y-2 cursor-pointer transition-all active:scale-95 shadow-3xs"
-          >
-            {/* Header Kategori */}
-            <div className="flex items-center justify-between border-b border-stone-200 pb-1.5">
-              <span className="font-black text-slate-800 uppercase text-[12px] flex items-center gap-1 truncate">
-                <span>🏷️</span> {kategori}
-              </span>
-              <span className="text-[10px] text-stone-400 font-bold">Klik Detail ↗</span>
-            </div>
+                  return (
+                    <div 
+                      key={kategori} 
+                      onClick={() => handleBukaModalKategori(kategori, val)}
+                      className="bg-stone-50 hover:bg-amber-50/80 border border-stone-200 hover:border-amber-300 rounded-xl p-3 text-xs space-y-2 cursor-pointer transition-all active:scale-95 shadow-3xs"
+                    >
+                      <div className="flex items-center justify-between border-b border-stone-200 pb-1.5">
+                        <span className="font-black text-slate-800 uppercase text-[12px] flex items-center gap-1 truncate">
+                          <span>🏷️</span> {kategori}
+                        </span>
+                        <span className="text-[10px] text-stone-400 font-bold">Klik Detail ↗</span>
+                      </div>
 
-            {/* Rincian Kebawah */}
-            <div className="space-y-1 font-mono text-[11px]">
-              {/* Total */}
-              <div className="flex justify-between items-center text-slate-700">
-                <span className="font-sans font-bold text-stone-500">Total :</span>
-                <span className="font-extrabold font-mono bg-stone-200/80 px-1.5 py-0.2 rounded text-slate-800">
-                  {val.total}
-                </span>
-              </div>
+                      <div className="space-y-1 font-mono text-[11px]">
+                        <div className="flex justify-between items-center text-slate-700">
+                          <span className="font-sans font-bold text-stone-500">Total :</span>
+                          <span className="font-extrabold font-mono bg-stone-200/80 px-1.5 py-0.2 rounded text-slate-800">
+                            {val.total}
+                          </span>
+                        </div>
 
-              {/* Sudah */}
-              <div className="flex justify-between items-center text-emerald-800">
-                <span className="font-sans font-bold">Sudah :</span>
-                <span className="font-extrabold bg-emerald-100/80 px-1.5 py-0.2 rounded">
-                  {val.sudahFasih} ({persenSudah.toFixed(1)}%)
-                </span>
-              </div>
+                        <div className="flex justify-between items-center text-emerald-800">
+                          <span className="font-sans font-bold">Sudah :</span>
+                          <span className="font-extrabold bg-emerald-100/80 px-1.5 py-0.2 rounded">
+                            {val.sudahFasih} ({persenSudah.toFixed(1)}%)
+                          </span>
+                        </div>
 
-              {/* Belum */}
-              <div className="flex justify-between items-center text-orange-900">
-                <span className="font-sans font-bold">Belum :</span>
-                <span className={`font-extrabold px-1.5 py-0.2 rounded ${sisaBelumFasih > 0 ? 'bg-orange-100' : 'bg-stone-100 text-stone-400'}`}>
-                  {sisaBelumFasih} ({persenBelum.toFixed(1)}%)
-                </span>
-              </div>
+                        <div className="flex justify-between items-center text-orange-900">
+                          <span className="font-sans font-bold">Belum :</span>
+                          <span className={`font-extrabold px-1.5 py-0.2 rounded ${sisaBelumFasih > 0 ? 'bg-orange-100' : 'bg-stone-100 text-stone-400'}`}>
+                            {sisaBelumFasih} ({persenBelum.toFixed(1)}%)
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
             </div>
           </div>
-        );
-      })
-    )}
-  </div>
-</div>
         </div>
 
         {/* TABEL AGREGAT UTAMA */}
@@ -1086,10 +1287,19 @@ export default function DashboardKantor() {
             </h2>
             
             <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setModalDownload(true)}
+                className="bg-emerald-700 text-white font-bold px-3 py-1.5 rounded-lg text-xs hover:bg-emerald-600 shadow-3xs transition-colors flex items-center gap-1.5"
+              >
+                <span>📥 Download Hasil Konfirmasi</span>
+              </button>
+
               <label className={`cursor-pointer inline-flex items-center gap-1.5 bg-amber-700 text-white font-bold px-3 py-1.5 rounded-lg text-xs hover:bg-amber-600 shadow-3xs transition-colors ${uploading ? 'opacity-50 pointer-events-none' : ''}`}>
                 <span>📁 Impor Excel</span>
                 <input type="file" accept=".xlsx, .xls" onChange={handlePilihFileExcel} className="hidden" disabled={uploading} />
               </label>
+
               <button 
                 type="button"
                 disabled={loading}
@@ -1304,15 +1514,114 @@ export default function DashboardKantor() {
         </div>
       </div>
 
-      {/* MODAL PROSES & REVIEW IMPOR EXCEL CERDAS */}
+      {/* MODAL DOWNLOAD EXCEL FASILITAS KANTOR */}
+{modalDownload && (
+        <div className="fixed inset-0 bg-slate-950/70 z-50 flex items-center justify-center p-4 backdrop-blur-xs animate-fade-in">
+          <div className="bg-white w-full max-w-md rounded-2xl border border-stone-200 p-6 shadow-2xl space-y-4 animate-scale-up">
+            <div className="flex items-center gap-2.5 text-emerald-800 border-b pb-3">
+              <span className="text-xl">📥</span>
+              <h3 className="text-sm font-black uppercase tracking-wider text-slate-800">
+                Download Rekap Hasil Konfirmasi Anomali
+              </h3>
+            </div>
+
+            <p className="text-xs text-stone-600 leading-relaxed font-medium">
+              Pilih tanggal snapshot data anomali yang ingin Anda unduh ke format Microsoft Excel.
+            </p>
+
+            <div className="space-y-1.5 bg-stone-50 p-3.5 rounded-xl border border-stone-200">
+              <label className="text-[10px] font-black text-slate-600 uppercase tracking-wide block">
+                📅 Tanggal Snapshot Anomali:
+              </label>
+              <select
+                disabled={downloading}
+                value={tglSnapshotDownload}
+                onChange={(e) => setTglSnapshotDownload(e.target.value)}
+                className="w-full bg-white border border-stone-300 rounded-xl p-2.5 text-xs font-bold font-mono text-slate-800 focus:outline-emerald-600 cursor-pointer disabled:bg-stone-100 disabled:cursor-not-allowed"
+              >
+                {availableSnapshots.map(tgl => (
+                  <option key={tgl} value={tgl}>
+                    {formatTanggalIndo(tgl)} ({tgl})
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* INDIKATOR PROGRESS BAR DOWNLOAD */}
+            {downloading && (
+              <div className="bg-emerald-50/80 border border-emerald-200 p-3.5 rounded-xl space-y-2 animate-fade-in">
+                <div className="flex justify-between items-center text-[11px] font-mono font-bold text-emerald-900">
+                  <span className="flex items-center gap-1.5 font-sans">
+                    <span className="animate-spin inline-block">🔄</span> Mengambil data...
+                  </span>
+                  <span>
+                    {downloadProgress.current.toLocaleString('id-ID')} / {downloadProgress.total.toLocaleString('id-ID')} baris
+                  </span>
+                </div>
+
+                <div className="w-full bg-emerald-200/60 rounded-full h-2.5 overflow-hidden p-[1px]">
+                  <div
+                    className="bg-gradient-to-r from-emerald-600 to-green-500 h-full rounded-full transition-all duration-300 ease-out"
+                    style={{
+                      width: `${
+                        downloadProgress.total > 0
+                          ? Math.min(100, Math.round((downloadProgress.current / downloadProgress.total) * 100))
+                          : 0
+                      }%`
+                    }}
+                  ></div>
+                </div>
+
+                <div className="text-right">
+                  <span className="text-[10px] font-mono font-bold text-emerald-800">
+                    {downloadProgress.total > 0
+                      ? `${Math.round((downloadProgress.current / downloadProgress.total) * 100)}% Selesai`
+                      : 'Memulai...'}
+                  </span>
+                </div>
+              </div>
+            )}
+
+            <div className="flex justify-end gap-2 pt-2 border-t text-xs font-bold">
+              <button
+                type="button"
+                disabled={downloading}
+                onClick={() => setModalDownload(false)}
+                className="bg-stone-100 hover:bg-stone-200 text-slate-700 px-4 py-2 rounded-xl border disabled:opacity-50"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                disabled={downloading}
+                onClick={handleDownloadAnomaliExcel}
+                className="bg-emerald-700 hover:bg-emerald-600 text-white px-5 py-2 rounded-xl shadow-md shadow-emerald-900/20 flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {downloading ? (
+                  <>
+                    <span className="animate-spin">🔄</span>
+                    <span>Mengunduh...</span>
+                  </>
+                ) : (
+                  <>
+                    <span>🚀 Unduh File Excel</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL PROSES & REVIEW IMPOR EXCEL CERDAS + MAPPER INDIKATOR DINAMIS */}
       {modalUploadReview && (
         <div className="fixed inset-0 bg-slate-950/70 z-50 flex items-center justify-center p-4 backdrop-blur-xs animate-fade-in">
-          <div className={`bg-white w-full rounded-2xl border border-stone-200 p-6 shadow-2xl space-y-5 animate-scale-up transition-all ${uploadProgressStatus === 'review_rows' ? 'max-w-4xl' : 'max-w-md'}`}>
+          <div className={`bg-white w-full rounded-2xl border border-stone-200 p-6 shadow-2xl space-y-5 animate-scale-up transition-all ${uploadProgressStatus === 'review_rows' ? 'max-w-4xl' : 'max-w-xl'}`}>
             
             <div className="flex items-center gap-2.5 text-amber-800 border-b pb-3">
               <span className="text-xl">📊</span>
               <h3 className="text-sm font-black uppercase tracking-wider text-slate-800">
-                {uploadProgressStatus === 'review_rows' ? '⚡ Rekapitulasi Jenis Anomali Unik' : 'Manajer Snapshot Excel'}
+                {uploadProgressStatus === 'review_rows' ? '⚡ Rekapitulasi Jenis Anomali Unik' : 'Manajer Snapshot & Pemeta Kolom Excel'}
               </h3>
             </div>
 
@@ -1333,34 +1642,66 @@ export default function DashboardKantor() {
                   />
                 </div>
 
-                <div className="border-t pt-2">
-                  <span className="text-[10px] font-black text-amber-800 block uppercase tracking-wider mb-2">🔄 Pemetaan Kolom Berkas (Column Mapper):</span>
-                  <p className="text-[11px] text-stone-500 mb-3">Sesuaikan kolom sistem (kiri) dengan nama kolom yang ada di dalam Excel Anda (kanan).</p>
-                  
-                  <div className="space-y-3">
-                    {[
-                      { label: '🆔 ID Assignment / Dokumen *', field: 'assignment_id' },
-                      { label: '🧑 Nama Pengusaha / Kepala RT *', field: 'nama_subjek' },
-                      { label: '⚠️ Nama / Deskripsi Anomali *', field: 'nama_anomali' },
-                      { label: '📍 Kode Desa (10 Digit)', field: 'kodedesa' },
-                      { label: '🗺️ Kode SLS (4 Digit)', field: 'sls' },
-                      { label: '🌿 Kode Sub-SLS (2 Digit)', field: 'subsls' },
-                      { label: '🔗 Tautan Dokumen FASIH', field: 'link_fasih' },
-                    ].map((item) => (
-                      <div key={item.field} className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 bg-stone-50 p-2 rounded-lg border border-stone-200">
-                        <label className="text-xs font-semibold text-slate-700 w-full sm:w-[45%]">{item.label}</label>
-                        <select
-                          value={columnMap[item.field]}
-                          onChange={(e) => setColumnMap(prev => ({ ...prev, [item.field]: e.target.value }))}
-                          className="w-full sm:w-[53%] bg-white border rounded p-1.5 text-xs text-slate-800 font-medium focus:ring-1 focus:ring-amber-600 outline-none"
-                        >
-                          <option value="">-- Lewati / Tidak Ada --</option>
-                          {excelHeaders.map(headerName => (
-                            <option key={headerName} value={headerName}>{headerName}</option>
-                          ))}
-                        </select>
-                      </div>
-                    ))}
+                <div className="border-t pt-2 space-y-3">
+                  <div>
+                    <span className="text-[10px] font-black text-amber-800 block uppercase tracking-wider mb-1">🔄 Pemetaan Kolom Utama Sistem:</span>
+                    <p className="text-[11px] text-stone-500 mb-2">Sesuaikan kolom sistem (kiri) dengan nama kolom yang ada di dalam Excel Anda (kanan).</p>
+                    
+                    <div className="space-y-2">
+                      {[
+                        { label: '🆔 ID Assignment / Dokumen *', field: 'assignment_id' },
+                        { label: '🧑 Nama Pengusaha / Kepala RT *', field: 'nama_subjek' },
+                        { label: '⚠️ Nama / Deskripsi Anomali *', field: 'nama_anomali' },
+                        { label: '📍 Kode Desa (10 Digit)', field: 'kodedesa' },
+                        { label: '🗺️ Kode SLS (4 Digit)', field: 'sls' },
+                        { label: '🌿 Kode Sub-SLS (2 Digit)', field: 'subsls' },
+                        { label: '🔗 Tautan Dokumen FASIH', field: 'link_fasih' },
+                      ].map((item) => (
+                        <div key={item.field} className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 bg-stone-50 p-2 rounded-lg border border-stone-200">
+                          <label className="text-xs font-semibold text-slate-700 w-full sm:w-[45%]">{item.label}</label>
+                          <select
+                            value={columnMap[item.field]}
+                            onChange={(e) => setColumnMap(prev => ({ ...prev, [item.field]: e.target.value }))}
+                            className="w-full sm:w-[53%] bg-white border rounded p-1.5 text-xs text-slate-800 font-medium focus:ring-1 focus:ring-amber-600 outline-none"
+                          >
+                            <option value="">-- Lewati / Tidak Ada --</option>
+                            {excelHeaders.map(headerName => (
+                              <option key={headerName} value={headerName}>{headerName}</option>
+                            ))}
+                          </select>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* SUB-PANEL PEMILIHAN KOLOM INDIKATOR DINAMIS */}
+                  <div className="bg-amber-50/60 border border-amber-200/80 p-3 rounded-xl space-y-2">
+                    <span className="text-[10px] font-black text-amber-900 uppercase tracking-wider block">
+                      📌 Pilih Kolom Indikator Tambahan (Dinamis):
+                    </span>
+                    <p className="text-[11px] text-amber-800/80">
+                      Centang kolom-kolom Excel yang ingin ditampilkan sebagai petunjuk nilai indikator responden di modal detail subjek.
+                    </p>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 max-h-36 overflow-y-auto p-2 bg-white rounded-lg border border-stone-200">
+                      {excelHeaders.map((hdr) => {
+                        const isMainColumn = Object.values(columnMap).includes(hdr);
+                        if (isMainColumn) return null; // Lewati kolom utama yang sudah dipetakan di atas
+
+                        const isChecked = selectedIndikatorHeaders.includes(hdr);
+                        return (
+                          <label key={hdr} className="flex items-center gap-2 text-xs font-medium text-slate-700 cursor-pointer hover:bg-stone-50 p-1 rounded">
+                            <input 
+                              type="checkbox" 
+                              checked={isChecked}
+                              onChange={() => toggleIndikatorHeader(hdr)}
+                              className="rounded border-stone-300 text-amber-600 focus:ring-amber-500"
+                            />
+                            <span className="truncate">{hdr}</span>
+                          </label>
+                        );
+                      })}
+                    </div>
                   </div>
                 </div>
 
@@ -1563,24 +1904,22 @@ export default function DashboardKantor() {
               </button>
             </div>
 
-{/* Di dalam modalKategoriObj */}
-<div className="grid grid-cols-3 gap-3 text-center">
-  <div className="bg-stone-50 border border-stone-200 p-2.5 rounded-xl">
-    <span className="text-[10px] text-stone-500 font-bold uppercase block">Total Anomali</span>
-    <span className="text-lg font-black text-slate-800 font-mono">{modalKategoriObj.total}</span>
-  </div>
-  <div className="bg-emerald-50 border border-emerald-200 p-2.5 rounded-xl">
-    <span className="text-[10px] text-emerald-800 font-bold uppercase block">Sudah FASIH</span>
-    <span className="text-lg font-black text-emerald-700 font-mono">{modalKategoriObj.sudahFasih}</span>
-  </div>
-  <div className="bg-orange-50 border border-orange-200 p-2.5 rounded-xl">
-    <span className="text-[10px] text-orange-800 font-bold uppercase block">Belum FASIH</span>
-    {/* 💡 Gunakan pengurangan langsung agar konsisten */}
-    <span className="text-lg font-black text-orange-700 font-mono">
-      {modalKategoriObj.total - modalKategoriObj.sudahFasih}
-    </span>
-  </div>
-</div>
+            <div className="grid grid-cols-3 gap-3 text-center">
+              <div className="bg-stone-50 border border-stone-200 p-2.5 rounded-xl">
+                <span className="text-[10px] text-stone-500 font-bold uppercase block">Total Anomali</span>
+                <span className="text-lg font-black text-slate-800 font-mono">{modalKategoriObj.total}</span>
+              </div>
+              <div className="bg-emerald-50 border border-emerald-200 p-2.5 rounded-xl">
+                <span className="text-[10px] text-emerald-800 font-bold uppercase block">Sudah FASIH</span>
+                <span className="text-lg font-black text-emerald-700 font-mono">{modalKategoriObj.sudahFasih}</span>
+              </div>
+              <div className="bg-orange-50 border border-orange-200 p-2.5 rounded-xl">
+                <span className="text-[10px] text-orange-800 font-bold uppercase block">Belum FASIH</span>
+                <span className="text-lg font-black text-orange-700 font-mono">
+                  {modalKategoriObj.total - modalKategoriObj.sudahFasih}
+                </span>
+              </div>
+            </div>
 
             <div className="max-h-[50vh] overflow-y-auto border border-stone-200 rounded-xl divide-y divide-stone-150">
               {modalKategoriObj.listAnomali.length === 0 ? (
@@ -1729,6 +2068,9 @@ export default function DashboardKantor() {
                           setTimeout(() => setCopiedId(null), 2000);
                         };
 
+                        // Ekstrak data indikator dinamis per baris anomali
+                        const entriesIndikator = Object.entries(anomali.detail_indikator || {}).filter(([_, val]) => val !== undefined && val !== null && String(val).trim() !== '');
+
                         return (
                           <div 
                             key={anomali.anomali_id} 
@@ -1757,6 +2099,23 @@ export default function DashboardKantor() {
                                 {anomali.status_konfirmasi === 'Perlu Perbaikan Data' && <span className="text-[10px] font-extrabold bg-rose-100 text-rose-800 px-2 py-0.5 rounded-md border border-rose-200 shadow-3xs">🔴 Perlu Perbaikan</span>}
                                 {IsSiapEksekusi && <span className="text-[9px] font-extrabold bg-amber-600 text-white px-1.5 py-0.5 rounded animate-pulse">SIAP VERIFIKASI</span>}
                               </div>
+
+                              {/* DISPLAY BADGES INDIKATOR DINAMIS (JIKA ADA) */}
+                              {entriesIndikator.length > 0 && (
+                                <div className="p-2.5 bg-rose-50/90 border border-rose-200/90 rounded-lg space-y-1.5 shadow-3xs">
+                                  <span className="text-[10px] font-black text-amber-900 uppercase tracking-wider block">
+                                    📌 Indikator Penyebab Anomali:
+                                  </span>
+                                  <div className="flex flex-wrap gap-2">
+                                    {entriesIndikator.map(([k, v]) => (
+                                      <div key={k} className="bg-white border border-amber-300 px-2.5 py-1 rounded-md text-xs flex items-center gap-1.5 shadow-2xs">
+                                        <span className="text-stone-500 font-semibold">{k}:</span>
+                                        <strong className="text-amber-950 font-bold font-mono">{v}</strong>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
 
                               <div className="grid grid-cols-1 gap-2.5">
                                 {anomali.catatan_lapangan ? (
