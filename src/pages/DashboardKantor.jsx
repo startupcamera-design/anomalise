@@ -354,23 +354,62 @@ const prosesStrukturAgregat = (data) => {
   // FUNGSI EKSPOR ANOMALI KE EXCEL DENGAN PERFORMA TINGGI
 // FUNGSI EKSPOR ANOMALI KE EXCEL DENGAN VIEW & BATCHING (SANGAT RINGAN & ANTI-FETCH ERROR)
 // FUNGSI EKSPOR ANOMALI KE EXCEL DENGAN PROGRESS TRACKER
-  const handleDownloadAnomaliExcel = async () => {
-    if (!tglSnapshotDownload) {
-      alert("Silakan pilih tanggal snapshot terlebih dahulu!");
+const handleDownloadAnomaliExcel = async () => {
+  if (!tglSnapshotDownload) {
+    alert("Silakan pilih tanggal snapshot terlebih dahulu!");
+    return;
+  }
+
+  setDownloading(true);
+  setDownloadProgress({ current: 0, total: 0 });
+
+  try {
+    const BATCH_SIZE = 1000;
+    let offset = 0;
+    let semuaDataAnomali = [];
+    let totalData = 0;
+
+    // 1. TARIK BATCH PERTAMA & AMBIL TOTAL JUMLAH DATA
+    const { data: firstBatch, error: firstErr, count } = await supabaseData
+      .from('view_monitoring_anomali')
+      .select(`
+        kdkec,
+        nmkec,
+        kddesa,
+        nmdesa,
+        idsubsls,
+        assignment_id,
+        nama_subjek,
+        kode_anomali,
+        status_konfirmasi,
+        catatan_lapangan,
+        catatan_pegawai,
+        status_fasih,
+        nama_pcl,
+        nama_pml,
+        remark
+      `, { count: 'exact' })
+      .eq('tanggal_snapshot', tglSnapshotDownload)
+      .order('idsubsls', { ascending: true })       // Order 1: idsubsls ASC
+      .order('assignment_id', { ascending: true }) // Order 2: assignment_id ASC
+      .range(0, BATCH_SIZE - 1);
+
+    if (firstErr) throw firstErr;
+
+    semuaDataAnomali = [...(firstBatch || [])];
+    totalData = count || semuaDataAnomali.length;
+    setDownloadProgress({ current: semuaDataAnomali.length, total: totalData });
+
+    if (semuaDataAnomali.length === 0) {
+      alert(`Tidak ada data anomali ditemukan pada tanggal snapshot ${formatTanggalIndo(tglSnapshotDownload)}.`);
+      setDownloading(false);
       return;
     }
 
-    setDownloading(true);
-    setDownloadProgress({ current: 0, total: 0 });
-
-    try {
-      const BATCH_SIZE = 1000;
-      let offset = 0;
-      let semuaDataAnomali = [];
-      let totalData = 0;
-
-      // 1. TARIK BATCH PERTAMA & AMBIL TOTAL JUMLAH DATA
-      const { data: firstBatch, error: firstErr, count } = await supabaseData
+    // 2. TARIK BATCH TERSISA SECARA BERTAHAP & UPDATE PROGRESS
+    offset += BATCH_SIZE;
+    while (offset < totalData) {
+      const { data: nextBatch, error: nextErr } = await supabaseData
         .from('view_monitoring_anomali')
         .select(`
           kdkec,
@@ -378,114 +417,145 @@ const prosesStrukturAgregat = (data) => {
           kddesa,
           nmdesa,
           idsubsls,
+          assignment_id,
+          nama_subjek,
           kode_anomali,
           status_konfirmasi,
           catatan_lapangan,
           catatan_pegawai,
           status_fasih,
+          nama_pcl,
+          nama_pml,
           remark
-        `, { count: 'exact' })
+        `)
         .eq('tanggal_snapshot', tglSnapshotDownload)
-        .range(0, BATCH_SIZE - 1);
+        .order('idsubsls', { ascending: true })       // Order 1: idsubsls ASC
+        .order('assignment_id', { ascending: true }) // Order 2: assignment_id ASC
+        .range(offset, offset + BATCH_SIZE - 1);
 
-      if (firstErr) throw firstErr;
+      if (nextErr) throw nextErr;
 
-      semuaDataAnomali = [...(firstBatch || [])];
-      totalData = count || semuaDataAnomali.length;
-      setDownloadProgress({ current: semuaDataAnomali.length, total: totalData });
-
-      if (semuaDataAnomali.length === 0) {
-        alert(`Tidak ada data anomali ditemukan pada tanggal snapshot ${formatTanggalIndo(tglSnapshotDownload)}.`);
-        setDownloading(false);
-        return;
+      if (nextBatch && nextBatch.length > 0) {
+        semuaDataAnomali = [...semuaDataAnomali, ...nextBatch];
+        setDownloadProgress({ current: semuaDataAnomali.length, total: totalData });
       }
 
-      // 2. TARIK BATCH TERSISA SECARA BERTAHAP & UPDATE PROGRESS
       offset += BATCH_SIZE;
-      while (offset < totalData) {
-        const { data: nextBatch, error: nextErr } = await supabaseData
-          .from('view_monitoring_anomali')
-          .select(`
-            kdkec,
-            nmkec,
-            kddesa,
-            nmdesa,
-            idsubsls,
-            kode_anomali,
-            status_konfirmasi,
-            catatan_lapangan,
-            catatan_pegawai,
-            status_fasih,
-            remark
-          `)
-          .eq('tanggal_snapshot', tglSnapshotDownload)
-          .range(offset, offset + BATCH_SIZE - 1);
+    }
 
-        if (nextErr) throw nextErr;
+    // 3. SUSUN DATA UNTUK EXCEL
+    const dataSiapCetak = semuaDataAnomali.map(item => ({
+      kdkec: item.kdkec || '-',
+      nmkec: item.nmkec || '-',
+      kddesa: item.kddesa || '-',
+      nmdesa: item.nmdesa || '-',
+      idsubsls: item.idsubsls || '-',
+      assignment_id: item.assignment_id || '-',
+      nama_subjek: item.nama_subjek || '-',
+      kode_anomali: item.kode_anomali || 'ERR',
+      status_konfirmasi: item.status_konfirmasi || 'Belum Tindak Lanjut',
+      catatan_lapangan: item.catatan_lapangan || '-',
+      catatan_pegawai: item.catatan_pegawai || '-',
+      status_fasih: item.status_fasih || 'Belum Tindak Lanjut FASIH',
+      nama_pcl: item.nama_pcl || '-',
+      nama_pml: item.nama_pml || '-',
+      remark: item.remark || '-'
+    }));
 
-        if (nextBatch && nextBatch.length > 0) {
-          semuaDataAnomali = [...semuaDataAnomali, ...nextBatch];
-          setDownloadProgress({ current: semuaDataAnomali.length, total: totalData });
-        }
+    // 4. URUTKAN DATA HASIL AKHIR (kode_anomali ASC, idsubsls ASC)
+    dataSiapCetak.sort((a, b) => {
+      const cmpKode = String(a.kode_anomali).localeCompare(String(b.kode_anomali));
+      if (cmpKode !== 0) return cmpKode;
+      return String(a.idsubsls).localeCompare(String(b.idsubsls));
+    });
 
-        offset += BATCH_SIZE;
+    // 5. HITUNG REKAP PER KODE ANOMALI
+    const mapRekap = {};
+    dataSiapCetak.forEach(item => {
+      const kode = item.kode_anomali;
+      if (!mapRekap[kode]) {
+        mapRekap[kode] = {
+          kode_anomali: kode,
+          total: 0,
+          sudah_fasih: 0,
+          remark_isi: 0
+        };
       }
 
-      // 3. SUSUN DATA UNTUK EXCEL
-      const dataSiapCetak = semuaDataAnomali.map(item => ({
-        kdkec: item.kdkec || '-',
-        nmkec: item.nmkec || '-',
-        kddesa: item.kddesa || '-',
-        nmdesa: item.nmdesa || '-',
-        idsubsls: item.idsubsls || '-',
-        kode_anomali: item.kode_anomali || 'ERR',
-        status_konfirmasi: item.status_konfirmasi || 'Belum Tindak Lanjut',
-        catatan_lapangan: item.catatan_lapangan || '-',
-        catatan_pegawai: item.catatan_pegawai || '-',
-        status_fasih: item.status_fasih || 'Belum Tindak Lanjut FASIH'
-      }));
+      mapRekap[kode].total += 1;
 
-      // 4. URUTKAN DATA (kode_anomali ASC, idsubsls ASC)
-      dataSiapCetak.sort((a, b) => {
-        const cmpKode = String(a.kode_anomali).localeCompare(String(b.kode_anomali));
-        if (cmpKode !== 0) return cmpKode;
-        return String(a.idsubsls).localeCompare(String(b.idsubsls));
-      });
+      // Cek apakah sudah FASIH (bukan default/Belum Tindak Lanjut FASIH)
+      if (item.status_fasih && item.status_fasih !== 'Belum Tindak Lanjut FASIH') {
+        mapRekap[kode].sudah_fasih += 1;
+      }
 
-      // 5. MEMBUAT DAN MENGENERASI FILE EXCEL
-      const worksheet = XLSX.utils.json_to_sheet(dataSiapCetak, {
-        header: [
-          'kdkec', 
-          'nmkec', 
-          'kddesa', 
-          'nmdesa', 
-          'idsubsls', 
-          'kode_anomali', 
-          'status_konfirmasi', 
-          'catatan_lapangan', 
-          'catatan_pegawai', 
-          'status_fasih'
-        ]
-      });
+      // Cek apakah remark terisi dan bukan '-'
+      if (item.remark && item.remark.trim() !== '' && item.remark.trim() !== '-') {
+        mapRekap[kode].remark_isi += 1;
+      }
+    });
 
-      worksheet['!cols'] = [
-        { wch: 10 }, { wch: 22 }, { wch: 12 }, { wch: 22 }, { wch: 18 },
-        { wch: 14 }, { wch: 25 }, { wch: 35 }, { wch: 35 }, { wch: 28 }
-      ];
+    // Ubah map rekap ke array & urutkan berdasarkan kode_anomali ASC
+    const dataRekap = Object.values(mapRekap);
+    dataRekap.sort((a, b) => String(a.kode_anomali).localeCompare(String(b.kode_anomali)));
 
-      const workbook = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(workbook, worksheet, 'Data Anomali');
+    // Tambahkan baris TOTAL di bagian bawah rekap
+    const totalSemua = dataRekap.reduce((acc, curr) => ({
+      kode_anomali: 'TOTAL',
+      total: acc.total + curr.total,
+      sudah_fasih: acc.sudah_fasih + curr.sudah_fasih,
+      remark_isi: acc.remark_isi + curr.remark_isi
+    }), { kode_anomali: 'TOTAL', total: 0, sudah_fasih: 0, remark_isi: 0 });
 
-      XLSX.writeFile(workbook, `ANOMALI_SIMALI_${tglSnapshotDownload}.xlsx`);
-      setModalDownload(false);
+    dataRekap.push(totalSemua);
 
-    } catch (err) {
-      console.error("Gagal mengunduh Excel:", err);
-      alert("Gagal mengunduh data anomali: " + err.message);
-    } finally {
-      setDownloading(false);
-    }
-  };
+    // 6. MEMBUAT WORKSHEET & WORKBOOK EXCEL
+    const workbook = XLSX.utils.book_new();
+
+    // --- Sheet 1: Data Anomali ---
+    const wsData = XLSX.utils.json_to_sheet(dataSiapCetak, {
+      header: [
+        'kdkec', 'nmkec', 'kddesa', 'nmdesa', 'idsubsls', 'assignment_id',
+        'nama_subjek', 'kode_anomali', 'status_konfirmasi', 'catatan_lapangan',
+        'catatan_pegawai', 'status_fasih', 'nama_pcl', 'nama_pml', 'remark'
+      ]
+    });
+
+    wsData['!cols'] = [
+      { wch: 10 }, { wch: 22 }, { wch: 12 }, { wch: 22 }, { wch: 18 },
+      { wch: 14 }, { wch: 25 }, { wch: 15 }, { wch: 25 }, { wch: 30 },
+      { wch: 30 }, { wch: 25 }, { wch: 20 }, { wch: 20 }, { wch: 28 }
+    ];
+
+    XLSX.utils.book_append_sheet(workbook, wsData, 'Data Anomali');
+
+    // --- Sheet 2: Rekap ---
+    const wsRekap = XLSX.utils.json_to_sheet(dataRekap, {
+      header: ['kode_anomali', 'total', 'sudah_fasih', 'remark_isi']
+    });
+
+    // Rename header kolom di Excel
+    XLSX.utils.sheet_add_aoa(wsRekap, [
+      ['Kode Anomali', 'Total Anomali', 'Sudah FASIH', 'Remark Terisi']
+    ], { origin: 'A1' });
+
+    wsRekap['!cols'] = [
+      { wch: 20 }, { wch: 15 }, { wch: 15 }, { wch: 15 }
+    ];
+
+    XLSX.utils.book_append_sheet(workbook, wsRekap, 'Rekap');
+
+    // 7. DOWNLOAD FILE
+    XLSX.writeFile(workbook, `ANOMALI_SIMALI_${tglSnapshotDownload}.xlsx`);
+    setModalDownload(false);
+
+  } catch (err) {
+    console.error("Gagal mengunduh Excel:", err);
+    alert("Gagal mengunduh data anomali: " + err.message);
+  } finally {
+    setDownloading(false);
+  }
+};
 
   const handlePilihFileExcel = (e) => {
     const file = e.target.files[0];
@@ -892,71 +962,89 @@ const handleEksekusiUploadKeDatabase = async () => {
     });
   };
 
-  const handleBukaModalDetail = async (itemObj, namaKec) => {
-    setSubjekFilterTab('siap_eksekusi');
-    setLoadingModal(true);
-    setIdSelesaiLokal([]);
+const handleBukaModalDetail = async (itemObj, namaKec, isRekapKabupaten = false) => {
+  setSubjekFilterTab('siap_eksekusi');
+  setLoadingModal(true);
+  setIdSelesaiLokal([]);
 
-    setModalDetailObj({ 
-      ...itemObj, 
-      namaKec: namaKec || 'SEMUA KECAMATAN', 
-      kodePemicu: itemObj.kode, 
-      tglSnapshot: itemObj.tanggal_snapshot, 
-      daftarSubjek: [] 
+  setModalDetailObj({ 
+    ...itemObj, 
+    namaKec: namaKec || (isRekapKabupaten ? 'SEMUA WILAYAH (KABUPATEN)' : 'SEMUA KECAMATAN'), 
+    namaPml: isRekapKabupaten ? 'Semua PML (Rekap Kabupaten)' : (itemObj.namaPml || itemObj.pml_email || 'Semua PML'),
+    kodePemicu: itemObj.kode, 
+    tglSnapshot: itemObj.tanggal_snapshot, 
+    daftarSubjek: [] 
+  });
+
+  try {
+    let query = supabaseData
+      .from('view_monitoring_anomali')
+      .select('anomali_id, assignment_id, nama_subjek, nmkec, nmdesa, nmsls, nama_pcl, pcl_email, nama_pml, link_fasih, kode_anomali, status_konfirmasi, catatan_lapangan, status_fasih, catatan_pegawai, remark, detail_indikator');
+
+    if (!isRekapKabupaten) {
+      // 1. KONDISI DIKLIK DARI TABEL PER STRUKTUR: Filter spesifik wilayah, petugas & snapshot
+      if (itemObj.kdkec) query = query.eq('kdkec', itemObj.kdkec);
+      if (itemObj.pml_email && itemObj.pml_email !== 'no-email') {
+        query = query.eq('pml_email', itemObj.pml_email);
+      }
+      if (itemObj.tanggal_snapshot) {
+        query = query.eq('tanggal_snapshot', itemObj.tanggal_snapshot);
+      }
+    } else {
+      // 2. KONDISI DIKLIK DARI RINCIAN PER KATEGORI: Lepas filter kecamatan & PML, ikuti filter snapshot global
+      if (selectedSnapshot !== 'semua' && selectedSnapshot !== 'terakhir') {
+        query = query.eq('tanggal_snapshot', selectedSnapshot);
+      } else if (selectedSnapshot === 'terakhir' && availableSnapshots.length > 0) {
+        query = query.eq('tanggal_snapshot', availableSnapshots[0]);
+      }
+    }
+
+    if (itemObj.kode) query = query.eq('kode_anomali', itemObj.kode);
+
+    const { data: sampelTarget, error } = await query;
+
+    if (error) throw error;
+
+    const listAssignmentId = [...new Set((sampelTarget || []).map(s => s.assignment_id))];
+    const grupBerdasarkanSubjek = listAssignmentId.map(assignId => {
+      const semuaAnomaliSubjek = sampelTarget.filter(raw => raw.assignment_id === assignId);
+      const profilUtama = semuaAnomaliSubjek[0] || {};
+
+      return {
+        assignment_id: assignId,
+        nama_subjek: profilUtama.nama_subjek || 'Tanpa Nama',
+        nmkec: profilUtama.nmkec || '-',
+        nmdesa: profilUtama.nmdesa || '-',
+        nmsls: profilUtama.nmsls || '-',
+        nama_pcl: profilUtama.nama_pcl || profilUtama.pcl_email || '-',
+        nama_pml: profilUtama.nama_pml || '-',
+        link_fasih: profilUtama.link_fasih,
+        detailAnomali: semuaAnomaliSubjek.map(a => ({
+          anomali_id: a.anomali_id,
+          kode: a.kode_anomali,
+          status_konfirmasi: a.status_konfirmasi,
+          catatan_lapangan: a.catatan_lapangan,
+          status_fasih: a.status_fasih,
+          catatan_pegawai: a.catatan_pegawai,
+          remark: a.remark || null,
+          detail_indikator: a.detail_indikator || {}
+        }))
+      };
     });
 
-    try {
-      let query = supabaseData
-        .from('view_monitoring_anomali')
-        .select('anomali_id, assignment_id, nama_subjek, nmdesa, nmsls, nama_pcl, pcl_email, link_fasih, kode_anomali, status_konfirmasi, catatan_lapangan, status_fasih, catatan_pegawai, remark, detail_indikator');
+    const subjekValid = grupBerdasarkanSubjek.filter(subjek => 
+      subjek.detailAnomali.some(a => a.kode === itemObj.kode)
+    );
 
-      if (itemObj.kdkec) query = query.eq('kdkec', itemObj.kdkec);
-      if (itemObj.pml_email) query = query.eq('pml_email', itemObj.pml_email);
-      if (itemObj.tanggal_snapshot) query = query.eq('tanggal_snapshot', itemObj.tanggal_snapshot);
-      if(itemObj.kode) query = query.eq('kode_anomali', itemObj.kode);
-
-      const { data: sampelTarget, error } = await query;
-
-      if (error) throw error;
-
-      const listAssignmentId = [...new Set(sampelTarget.map(s => s.assignment_id))];
-      const grupBerdasarkanSubjek = listAssignmentId.map(assignId => {
-        const semuaAnomaliSubjek = sampelTarget.filter(raw => raw.assignment_id === assignId);
-        const profilUtama = semuaAnomaliSubjek[0];
-
-        return {
-          assignment_id: assignId,
-          nama_subjek: profilUtama.nama_subjek,
-          nmdesa: profilUtama.nmdesa,
-          nmsls: profilUtama.nmsls,
-          nama_pcl: profilUtama.nama_pcl || profilUtama.pcl_email,
-          link_fasih: profilUtama.link_fasih,
-          detailAnomali: semuaAnomaliSubjek.map(a => ({
-            anomali_id: a.anomali_id,
-            kode: a.kode_anomali,
-            status_konfirmasi: a.status_konfirmasi,
-            catatan_lapangan: a.catatan_lapangan,
-            status_fasih: a.status_fasih,
-            catatan_pegawai: a.catatan_pegawai,
-            remark: a.remark || null,
-            detail_indikator: a.detail_indikator || {}
-          }))
-        };
-      });
-
-      const subjekValid = grupBerdasarkanSubjek.filter(subjek => 
-        subjek.detailAnomali.some(a => a.kode === itemObj.kode)
-      );
-
-      setModalDetailObj(prev => ({ ...prev, daftarSubjek: subjekValid }));
-    } catch (err) {
-      console.error("Gagal memuat detail sampel:", err.message);
-      alert("Gagal memuat data detail subjek.");
-      setModalDetailObj(null);
-    } finally {
-      setLoadingModal(false);
-    }
-  };
+    setModalDetailObj(prev => ({ ...prev, daftarSubjek: subjekValid }));
+  } catch (err) {
+    console.error("Gagal memuat detail sampel:", err.message);
+    alert("Gagal memuat data detail subjek.");
+    setModalDetailObj(null);
+  } finally {
+    setLoadingModal(false);
+  }
+};
 
   const handleTutupModal = () => {
     setModalDetailObj(null);
@@ -1630,12 +1718,12 @@ const handleUbahRemarkLangsung = async (anomaliId, remarkKode) => {
                         return (
                           <tr
                             key={item.kode}
-                            onClick={() => handleBukaModalDetail(item, kec.namaKec)}
-                            className={`text-xs border-b border-stone-100 transition-colors cursor-pointer ${
-                              adaAntreanFasih 
-                                ? 'bg-orange-50/20 hover:bg-orange-50/60 border-l-[3px] border-l-orange-500 font-medium' 
-                                : 'hover:bg-stone-50/60 text-slate-500'
-                            }`}
+                            onClick={() => handleBukaModalDetail(item, kec.namaKec, false)}
+      className={`text-xs border-b border-stone-100 transition-colors cursor-pointer ${
+        adaAntreanFasih 
+          ? 'bg-orange-50/20 hover:bg-orange-50/60 border-l-[3px] border-l-orange-500 font-medium' 
+          : 'hover:bg-stone-50/60 text-slate-500'
+      }`}
                           >
                             <td className="p-2.5 pl-24 font-normal truncate flex items-center gap-2">
                               {adaAntreanFasih && (
@@ -2139,9 +2227,10 @@ const handleUbahRemarkLangsung = async (anomaliId, remarkKode) => {
                     <div 
                       key={anom.kode}
                       onClick={() => {
-                        setModalKategoriObj(null);
-                        handleBukaModalDetail(anom, 'SEMUA WILAYAH');
-                      }}
+        setModalKategoriObj(null);
+        // TERAPKAN FLAG TRUE KABUPATEN
+        handleBukaModalDetail(anom, 'SEMUA WILAYAH (KABUPATEN)', true);
+      }}
                       className="p-3 hover:bg-amber-50/60 cursor-pointer transition-colors flex items-center justify-between text-xs gap-3"
                     >
                       <div className="flex items-center gap-2.5">
@@ -2176,9 +2265,7 @@ const handleUbahRemarkLangsung = async (anomaliId, remarkKode) => {
         </div>
       )}
 
-      {/* MODAL DETAIL SUBJEK & SINKRONISASI FASIH */}
-{/* MODAL DETAIL SUBJEK & SINKRONISASI FASIH (OPTIMIZED SLIM & LIGHT) */}
-{/* MODAL DETAIL SUBJEK & SINKRONISASI FASIH */}
+      {/* MODAL DETAIL SUBJEK & SINKRONISASI FASIH */}    
 {modalDetailObj && (
   <div className="fixed inset-0 bg-slate-950/60 z-30 flex items-center justify-center p-6 animate-fade-in backdrop-blur-xs">
     <div className="bg-white w-full max-w-5xl rounded-2xl shadow-2xl flex flex-col max-h-[85vh] border border-stone-200 animate-scale-up">
