@@ -2372,7 +2372,7 @@ const handleUbahRemarkLangsung = async (anomaliId, remarkKode) => {
                   // Array definisi 5 Opsi Remark Ringkas
                   const listRemarkBtns = [
                     { kode: '#0', label: '#0 data sesuai' },
-                    { kode: '#1', label: '#1 salah konsep' },
+                    { kode: '#1', label: '#1 salah konsep/salah entri' },
                     { kode: '#2', label: '#2 revisit' },
                     { kode: '#3', label: '#3 informasi administrasi' },
                     { kode: '#4', label: '#4 metode lain' },
