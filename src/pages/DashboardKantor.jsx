@@ -24,7 +24,7 @@ export default function DashboardKantor() {
   const [loadingProgress, setLoadingProgress] = useState({ current: 0, total: 0 });
   // State Progress Download Excel
 const [downloadProgress, setDownloadProgress] = useState({ current: 0, total: 0 });
-
+const [keepStatusFasih, setKeepStatusFasih] = useState(true);
   // Data State
   const [masterAnomali, setMasterAnomali] = useState([]);
   const [treeData, setTreeData] = useState([]);
@@ -894,34 +894,42 @@ const handleEksekusiUploadKeDatabase = async () => {
               const keyCari = `${String(barisBaru.assignment_id || '').trim()}_${String(barisBaru.kode_anomali || '').trim()}_${String(barisBaru.nama_subjek || '').trim().toLowerCase()}`;
               const dataLamaDitemukan = petaCatatanRiwayat[keyCari];
 
-              if (dataLamaDitemukan) {
-                payloadTindakLanjut.push({
-                  anomali_id: barisBaru.id, 
-                  status_konfirmasi: dataLamaDitemukan.status_konfirmasi || 'Belum Tindak Lanjut',
-                  catatan_lapangan: dataLamaDitemukan.catatan_lapangan || null,
-                  dkonfirmasi_oleh_email: dataLamaDitemukan.dkonfirmasi_oleh_email || null,
-                  tanggal_konfirmasi: dataLamaDitemukan.tanggal_konfirmasi || null,
-                  
-                  status_fasih: dataLamaDitemukan.status_fasih || 'Belum Tindak Lanjut FASIH',
-                  dieksekusi_oleh_email: dataLamaDitemukan.dieksekusi_oleh_email || null,
-                  waktu_eksekusi_fasih: dataLamaDitemukan.waktu_eksekusi_fasih || null,
-                  
-                  status_monitoring: dataLamaDitemukan.status_monitoring || 'Belum Diperiksa',
-                  catatan_pegawai: dataLamaDitemukan.catatan_pegawai || null,
-                  diperiksa_oleh_email: dataLamaDitemukan.diperiksa_oleh_email || null,
-                  tanggal_periksa: dataLamaDitemukan.tanggal_periksa || null
-                });
-              } else {
-                payloadTindakLanjut.push({
-                  anomali_id: barisBaru.id,
-                  status_konfirmasi: 'Belum Tindak Lanjut',
-                  catatan_lapangan: null,
-                  dkonfirmasi_oleh_email: null,
-                  tanggal_konfirmasi: null,
-                  status_monitoring: 'Belum Diperiksa',
-                  status_fasih: 'Belum Tindak Lanjut FASIH'
-                });
-              }
+if (dataLamaDitemukan) {
+  // Cek apakah user memilih mempertahankan status FASIH atau di-reset
+  const useFasihLama = keepStatusFasih;
+
+  payloadTindakLanjut.push({
+    anomali_id: barisBaru.id, 
+    status_konfirmasi: dataLamaDitemukan.status_konfirmasi || 'Belum Tindak Lanjut',
+    catatan_lapangan: dataLamaDitemukan.catatan_lapangan || null,
+    dkonfirmasi_oleh_email: dataLamaDitemukan.dkonfirmasi_oleh_email || null,
+    tanggal_konfirmasi: dataLamaDitemukan.tanggal_konfirmasi || null,
+    
+    // IF keepStatusFasih = true -> Pakai data lama, ELSE -> Reset ke 'Belum Tindak Lanjut FASIH'
+    status_fasih: useFasihLama ? (dataLamaDitemukan.status_fasih || 'Belum Tindak Lanjut FASIH') : 'Belum Tindak Lanjut FASIH',
+    dieksekusi_oleh_email: useFasihLama ? (dataLamaDitemukan.dieksekusi_oleh_email || null) : null,
+    waktu_eksekusi_fasih: useFasihLama ? (dataLamaDitemukan.waktu_eksekusi_fasih || null) : null,
+    remark: useFasihLama ? (dataLamaDitemukan.remark || null) : null,
+    
+    status_monitoring: dataLamaDitemukan.status_monitoring || 'Belum Diperiksa',
+    catatan_pegawai: dataLamaDitemukan.catatan_pegawai || null,
+    diperiksa_oleh_email: dataLamaDitemukan.diperiksa_oleh_email || null,
+    tanggal_periksa: dataLamaDitemukan.tanggal_periksa || null
+  });
+} else {
+  payloadTindakLanjut.push({
+    anomali_id: barisBaru.id,
+    status_konfirmasi: 'Belum Tindak Lanjut',
+    catatan_lapangan: null,
+    dkonfirmasi_oleh_email: null,
+    tanggal_konfirmasi: null,
+    status_monitoring: 'Belum Diperiksa',
+    status_fasih: 'Belum Tindak Lanjut FASIH',
+    dieksekusi_oleh_email: null,
+    waktu_eksekusi_fasih: null,
+    remark: null
+  });
+}
             });
 
             if (payloadTindakLanjut.length > 0) {
@@ -1908,6 +1916,7 @@ const handleUbahRemarkLangsung = async (anomaliId, remarkKode) => {
       )}
 
       {/* MODAL PROSES & REVIEW IMPOR EXCEL CERDAS + MAPPER INDIKATOR DINAMIS */}
+{/* MODAL PROSES & REVIEW IMPOR EXCEL CERDAS + MAPPER INDIKATOR DINAMIS */}
       {modalUploadReview && (
         <div className="fixed inset-0 bg-slate-950/70 z-50 flex items-center justify-center p-4 backdrop-blur-xs animate-fade-in">
           <div className={`bg-white w-full rounded-2xl border border-stone-200 p-6 shadow-2xl space-y-5 animate-scale-up transition-all ${uploadProgressStatus === 'review_rows' ? 'max-w-4xl' : 'max-w-xl'}`}>
@@ -1934,6 +1943,47 @@ const handleUbahRemarkLangsung = async (anomaliId, remarkKode) => {
                     onChange={(e) => setPilihanTanggalSnapshot(e.target.value)}
                     className="w-full bg-white border border-stone-300 rounded-lg p-2 text-xs font-mono font-bold text-slate-800 focus:outline-amber-600"
                   />
+                </div>
+
+                {/* OPSI PILIHAN PENANGANAN STATUS FASIH HISTORIS */}
+                <div className="space-y-2 bg-stone-50 p-3 rounded-xl border border-stone-200">
+                  <label className="text-[10px] font-bold text-slate-600 block uppercase tracking-wide">
+                    ⚙️ Penanganan Status FASIH Historis:
+                  </label>
+
+                  <div className="space-y-1.5 text-xs font-medium">
+                    <label className="flex items-start gap-2.5 cursor-pointer p-2 rounded-lg bg-white border border-stone-200 hover:bg-amber-50/50 transition-colors">
+                      <input
+                        type="radio"
+                        name="keepFasihOption"
+                        checked={keepStatusFasih === true}
+                        onChange={() => setKeepStatusFasih(true)}
+                        className="mt-0.5 text-amber-600 focus:ring-amber-500"
+                      />
+                      <div>
+                        <span className="font-bold text-slate-800 block">Pertahankan Status FASIH Sebelumnya</span>
+                        <span className="text-[10px] text-stone-500 block leading-tight">
+                          Jika anomali yang sama sudah ditandai "Sudah Tindak Lanjut FASIH" pada snapshot lalu, status &amp; remark-nya tidak akan hilang.
+                        </span>
+                      </div>
+                    </label>
+
+                    <label className="flex items-start gap-2.5 cursor-pointer p-2 rounded-lg bg-white border border-stone-200 hover:bg-rose-50/50 transition-colors">
+                      <input
+                        type="radio"
+                        name="keepFasihOption"
+                        checked={keepStatusFasih === false}
+                        onChange={() => setKeepStatusFasih(false)}
+                        className="mt-0.5 text-rose-600 focus:ring-rose-500"
+                      />
+                      <div>
+                        <span className="font-bold text-rose-800 block">Reset Semua ke "Belum Tindak Lanjut FASIH"</span>
+                        <span className="text-[10px] text-stone-500 block leading-tight">
+                          Semua anomali hasil impor di-reset ulang ke "Belum Tindak Lanjut FASIH" untuk diverifikasi ulang dari awal.
+                        </span>
+                      </div>
+                    </label>
+                  </div>
                 </div>
 
                 <div className="border-t pt-2 space-y-3">
