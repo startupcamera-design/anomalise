@@ -895,7 +895,6 @@ const handleEksekusiUploadKeDatabase = async () => {
               const dataLamaDitemukan = petaCatatanRiwayat[keyCari];
 
 if (dataLamaDitemukan) {
-  // Cek apakah user memilih mempertahankan status FASIH atau di-reset
   const useFasihLama = keepStatusFasih;
 
   payloadTindakLanjut.push({
@@ -905,18 +904,21 @@ if (dataLamaDitemukan) {
     dkonfirmasi_oleh_email: dataLamaDitemukan.dkonfirmasi_oleh_email || null,
     tanggal_konfirmasi: dataLamaDitemukan.tanggal_konfirmasi || null,
     
-    // IF keepStatusFasih = true -> Pakai data lama, ELSE -> Reset ke 'Belum Tindak Lanjut FASIH'
+    // Status FASIH & Jejak Eksekutor di-reset jika keepStatusFasih = false
     status_fasih: useFasihLama ? (dataLamaDitemukan.status_fasih || 'Belum Tindak Lanjut FASIH') : 'Belum Tindak Lanjut FASIH',
     dieksekusi_oleh_email: useFasihLama ? (dataLamaDitemukan.dieksekusi_oleh_email || null) : null,
     waktu_eksekusi_fasih: useFasihLama ? (dataLamaDitemukan.waktu_eksekusi_fasih || null) : null,
-    remark: useFasihLama ? (dataLamaDitemukan.remark || null) : null,
+    
+    // Remark & Catatan Pegawai SELALU dipertahankan dari data lama
+    remark: dataLamaDitemukan.remark || null,
+    catatan_pegawai: dataLamaDitemukan.catatan_pegawai || null,
     
     status_monitoring: dataLamaDitemukan.status_monitoring || 'Belum Diperiksa',
-    catatan_pegawai: dataLamaDitemukan.catatan_pegawai || null,
     diperiksa_oleh_email: dataLamaDitemukan.diperiksa_oleh_email || null,
     tanggal_periksa: dataLamaDitemukan.tanggal_periksa || null
   });
 } else {
+  // Logic untuk data baru (tetap seperti semula)
   payloadTindakLanjut.push({
     anomali_id: barisBaru.id,
     status_konfirmasi: 'Belum Tindak Lanjut',
